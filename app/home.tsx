@@ -1,12 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import React, { useCallback, useState, useEffect, useRef } from 'react';
+import { useLanguage } from '../context/LanguageContext';
+
 import {
   ActivityIndicator, Animated, FlatList, StyleSheet, Text, TouchableOpacity,
   View, Image, Alert, TextInput, ScrollView, Modal, Platform,
   KeyboardAvoidingView, useWindowDimensions,
 } from 'react-native';
 import { supabase } from '../supabase';
+import { getCurrentUser } from '../utils/auth';
 import * as Location from 'expo-location';
 
 // ─────────────────────────────────────────────
@@ -40,16 +43,50 @@ const QUICK_CITIES = [
   'Delhi','Bengaluru','Chennai','Pune','Telangana',
 ];
 
+/** @handle for profile card: DB `username`, else slug from display name, else phone-based fallback. */
+function resolveProfilePublicHandle(
+  username: string | undefined,
+  displayName: string | undefined,
+  phone: string | undefined,
+): string {
+  const u = username?.trim();
+  if (u) return u;
+  const raw = displayName?.trim();
+  if (raw) {
+    const slug = raw
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/gi, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 30);
+    if (slug) return slug;
+  }
+  const digits = (phone ?? '').replace(/\D/g, '');
+  if (digits.length >= 4) return `user_${digits.slice(-8)}`;
+  return '';
+}
+
+const HOME_FEED_CACHE_TTL_MS = 30_000;
+const HOME_SAVED_CACHE_TTL_MS = 20_000;
+const HOME_LOCATION_CACHE_TTL_MS = 5 * 60_000;
+
+let homeListingsCache: { fetchedAt: number; data: any[] } | null = null;
+const homeSavedIdsCache = new Map<string, { fetchedAt: number; data: string[] }>();
+let homeLocationCache: { fetchedAt: number; area: string; city: string; state: string } | null = null;
+
 // ─────────────────────────────────────────────
 //  COMPONENT
 // ─────────────────────────────────────────────
 export default function Home() {
   const router = useRouter();
   const { width } = useWindowDimensions();
+  
+  // ✨ ACTIVATE BOTH STATIC AND DYNAMIC TRANSLATORS ✨
+  const { t, translateUGC } = useLanguage(); 
 
   // ── Core Data ──────────────────────────────
   const [listings, setListings]               = useState<any[]>([]);
   const [loading, setLoading]                 = useState(true);
+  const [refreshing, setRefreshing]           = useState(false);
   const [savedIds, setSavedIds]               = useState<string[]>([]);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
 
@@ -94,6 +131,11 @@ export default function Home() {
   const [voiceModalVisible, setVoiceModalVisible] = useState(false);
   const voicePulse = useRef(new Animated.Value(1)).current;
   const recognitionRef = useRef<any>(null);
+  const unreadRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fetchListingsRef = useRef<(options?: { force?: boolean; pullToRefresh?: boolean }) => Promise<void>>(async () => {});
+  const fetchSavedItemsRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
+  const fetchSmartLocationRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
+  const queueUnreadCountRefreshRef = useRef<(userId: string) => void>(() => {});
 
   const numColumns = Platform.OS === 'web' && width > 1024 ? 4
     : Platform.OS === 'web' && width > 768 ? 3 : 1;
@@ -111,43 +153,100 @@ export default function Home() {
   //  EFFECTS
   // ─────────────────────────────────────────────
   useEffect(() => {
-    if (activeLocation === 'Auto' && Platform.OS !== 'web') fetchSmartLocation();
+    if (activeLocation === 'Auto' && Platform.OS !== 'web') {
+      void fetchSmartLocationRef.current();
+    }
   }, [activeLocation]);
 
-  useFocusEffect(useCallback(() => { fetchListings(); fetchSavedItems(); }, []));
+  useFocusEffect(useCallback(() => {
+    void fetchListingsRef.current();
+    void fetchSavedItemsRef.current();
+  }, []));
 
   useFocusEffect(
     useCallback(() => {
       let user: any = null;
       const initNotification = async () => {
-        const { data: { user: currentUser } } = await supabase.auth.getUser();
+        const currentUser = await getCurrentUser();
         if (!currentUser) return;
         user = currentUser;
-        const { data: count } = await supabase.rpc('get_unread_chat_count', { p_user_id: user.id });
-        setUnreadMessagesCount(count || 0);
+        await refreshUnreadCount(user.id);
         const channel = supabase.channel('unread_messages_count')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, async () => {
-            const { data: newCount } = await supabase.rpc('get_unread_chat_count', { p_user_id: user.id });
-            setUnreadMessagesCount(newCount || 0);
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
+            queueUnreadCountRefreshRef.current(user.id);
           }).subscribe();
         return channel;
       };
       const channelPromise = initNotification();
-      return () => { channelPromise.then(channel => { if (channel) supabase.removeChannel(channel); }); };
+      return () => {
+        if (unreadRefreshTimeoutRef.current) {
+          clearTimeout(unreadRefreshTimeoutRef.current);
+          unreadRefreshTimeoutRef.current = null;
+        }
+        channelPromise.then(channel => { if (channel) supabase.removeChannel(channel); });
+      };
     }, [])
   );
 
   // ─────────────────────────────────────────────
   //  DATA FETCHING
   // ─────────────────────────────────────────────
-  const fetchSavedItems = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+  function queueUnreadCountRefresh(userId: string) {
+    if (unreadRefreshTimeoutRef.current) {
+      clearTimeout(unreadRefreshTimeoutRef.current);
+    }
+
+    unreadRefreshTimeoutRef.current = setTimeout(() => {
+      void refreshUnreadCount(userId);
+      unreadRefreshTimeoutRef.current = null;
+    }, 250);
+  }
+
+  async function refreshUnreadCount(userId: string) {
+    const { data: count } = await supabase.rpc('get_unread_chat_count', { p_user_id: userId });
+    setUnreadMessagesCount(count || 0);
+  }
+
+  const fetchSavedItems = async (force = false) => {
+    const user = await getCurrentUser();
     if (!user) return;
+
+    const cached = homeSavedIdsCache.get(user.id);
+    if (!force && cached && Date.now() - cached.fetchedAt < HOME_SAVED_CACHE_TTL_MS) {
+      setSavedIds(cached.data);
+      return;
+    }
+
     const { data } = await supabase.from('wishlist').select('listing_id').eq('user_id', user.id);
-    if (data) setSavedIds(data.map(item => item.listing_id));
+    if (data) {
+      const nextSavedIds = data.map(item => item.listing_id);
+      setSavedIds(nextSavedIds);
+      homeSavedIdsCache.set(user.id, { fetchedAt: Date.now(), data: nextSavedIds });
+    }
   };
 
-  const fetchSmartLocation = async () => {
+  const fetchSmartLocation = async (force = false) => {
+    if (!force && homeLocationCache && Date.now() - homeLocationCache.fetchedAt < HOME_LOCATION_CACHE_TTL_MS) {
+      setUserArea(homeLocationCache.area);
+      setUserCity(homeLocationCache.city);
+      setUserState(homeLocationCache.state);
+      applyFilters(
+        searchQuery,
+        selectedCategory,
+        'Auto',
+        listings,
+        homeLocationCache.area,
+        homeLocationCache.city,
+        homeLocationCache.state,
+        activeSort,
+        activePriceMin,
+        activePriceMax,
+        activeCondition,
+        activePostedWithin,
+      );
+      return;
+    }
+
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') { setActiveLocation('All India'); return; }
@@ -159,23 +258,56 @@ export default function Home() {
         const city  = geo.city || '';
         const state = geo.region || '';
         setUserArea(area); setUserCity(city); setUserState(state);
+        homeLocationCache = { fetchedAt: Date.now(), area, city, state };
         applyFilters(searchQuery, selectedCategory, 'Auto', listings, area, city, state, activeSort, activePriceMin, activePriceMax, activeCondition, activePostedWithin);
       }
     } catch { setActiveLocation('All India'); }
   };
 
-  const fetchListings = async () => {
-    setLoading(true);
-    const { data, error } = await supabase.from('listings').select('*').eq('is_sold', false).order('created_at', { ascending: false });
+  const fetchListings = async ({ force = false, pullToRefresh = false }: { force?: boolean; pullToRefresh?: boolean } = {}) => {
+    if (!force && homeListingsCache && Date.now() - homeListingsCache.fetchedAt < HOME_FEED_CACHE_TTL_MS) {
+      setListings(homeListingsCache.data);
+      applyFilters(
+        searchQuery,
+        selectedCategory,
+        activeLocation,
+        homeListingsCache.data,
+        userArea,
+        userCity,
+        userState,
+        activeSort,
+        activePriceMin,
+        activePriceMax,
+        activeCondition,
+        activePostedWithin,
+      );
+      setLoading(false);
+      return;
+    }
+
+    if (pullToRefresh) {
+      setRefreshing(true);
+    } else if (listings.length === 0) {
+      setLoading(true);
+    }
+
+    const { data, error } = await supabase
+      .from('listings')
+      .select('id, title, price, location, description, category, condition, image_urls, created_at')
+      .eq('is_sold', false)
+      .order('created_at', { ascending: false });
+
     if (!error && data) {
+      homeListingsCache = { fetchedAt: Date.now(), data };
       setListings(data);
       applyFilters(searchQuery, selectedCategory, activeLocation, data, userArea, userCity, userState, activeSort, activePriceMin, activePriceMax, activeCondition, activePostedWithin);
     }
     setLoading(false);
+    setRefreshing(false);
   };
 
   // ─────────────────────────────────────────────
-  //  MASTER FILTER ENGINE  (upgraded)
+  //  MASTER FILTER ENGINE 
   // ─────────────────────────────────────────────
   const applyFilters = (
     query:        string,
@@ -228,7 +360,7 @@ export default function Home() {
       result = result.filter(i => new Date(i.created_at).getTime() >= cutoff);
     }
 
-    // 6. Location (cascading)
+    // 6. Location
     if (locationSetting === 'All India') {
       setFeedScopeLabel('Showing ads from All India');
     } else if (locationSetting !== 'Auto') {
@@ -240,7 +372,6 @@ export default function Home() {
         setFeedScopeLabel(`No ads in ${locationSetting}. Showing All India.`);
       }
     } else {
-      // Auto cascading
       if (area) {
         const m = result.filter(i => i.location?.toLowerCase().includes(area.toLowerCase()));
         if (m.length) { result = m; setFeedScopeLabel(`Showing ads near your area (${area})`); }
@@ -275,7 +406,6 @@ export default function Home() {
   //  FILTER MODAL ACTIONS
   // ─────────────────────────────────────────────
   const openFilterModal = () => {
-    // Seed staged values from currently active
     setStagedSort(activeSort);
     setStagedPriceMin(activePriceMin);
     setStagedPriceMax(activePriceMax);
@@ -353,9 +483,8 @@ export default function Home() {
   };
 
   // ── Voice Search ─────────────────────────────────────────────────────────
-  const startVoiceSearch = () => {
+  const startVoiceSearch = async () => {
     if (Platform.OS === 'web') {
-      // Web: use native Web Speech API (works in Chrome, Edge, Safari)
       const SpeechRecognition =
         (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SpeechRecognition) {
@@ -382,14 +511,12 @@ export default function Home() {
       recognition.onend   = () => stopVoiceSearch();
       recognition.start();
     } else {
-      // Mobile: show listening modal + try expo-av / community Voice if installed
       setIsListening(true);
       setVoiceModalVisible(true);
       startPulse();
 
-      // Try to use @react-native-voice/voice if installed
       try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const Voice = require('@react-native-voice/voice').default;
         Voice.onSpeechResults = (e: any) => {
           const transcript = e.value?.[0] || '';
@@ -400,12 +527,11 @@ export default function Home() {
         Voice.start('en-IN');
         recognitionRef.current = Voice;
       } catch {
-        // Library not installed — auto-dismiss after 3s with helpful message
         setTimeout(() => {
           stopVoiceSearch();
           Alert.alert(
             'Voice Search',
-            'For voice search on mobile, run:\nnpx expo install @react-native-voice/voice\n\nVoice search works on web automatically.',
+            'For voice search on mobile, run:\nnpx expo install @react-native-voice/voice',
           );
         }, 3000);
       }
@@ -441,7 +567,7 @@ export default function Home() {
   const openProfileModal = async () => {
     setIsProfileMenuVisible(true);
     setLoadingProfile(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getCurrentUser();
     if (user) {
       const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
       setProfileData({ email: user.email, phone: user.phone, name: data?.display_name || '', username: data?.username || '', avatar_url: data?.avatar_url || '' });
@@ -474,22 +600,33 @@ export default function Home() {
   };
 
   const executeDelete = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getCurrentUser();
     if (user) {
       await supabase.from('profiles').update({ deleted_at: new Date().toISOString() }).eq('id', user.id);
       await supabase.auth.signOut(); router.replace('/');
     }
   };
 
+  const handleManualRefresh = async () => {
+    await Promise.all([
+      fetchListings({ force: true, pullToRefresh: true }),
+      fetchSavedItems(true),
+    ]);
+  };
+
   const toggleWishlist = async (listingId: string) => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getCurrentUser();
     if (!user) return Alert.alert('Login Required','Please log in to save items.');
     const isSaved = savedIds.includes(listingId);
     if (isSaved) {
-      setSavedIds(savedIds.filter(id => id !== listingId));
+      const nextSavedIds = savedIds.filter(id => id !== listingId);
+      setSavedIds(nextSavedIds);
+      homeSavedIdsCache.set(user.id, { fetchedAt: Date.now(), data: nextSavedIds });
       await supabase.from('wishlist').delete().match({ user_id: user.id, listing_id: listingId });
     } else {
-      setSavedIds([...savedIds, listingId]);
+      const nextSavedIds = [...savedIds, listingId];
+      setSavedIds(nextSavedIds);
+      homeSavedIdsCache.set(user.id, { fetchedAt: Date.now(), data: nextSavedIds });
       await supabase.from('wishlist').insert({ user_id: user.id, listing_id: listingId });
     }
   };
@@ -497,6 +634,11 @@ export default function Home() {
   // ─────────────────────────────────────────────
   //  RENDER HELPERS
   // ─────────────────────────────────────────────
+  fetchListingsRef.current = fetchListings;
+  fetchSavedItemsRef.current = fetchSavedItems;
+  fetchSmartLocationRef.current = fetchSmartLocation;
+  queueUnreadCountRefreshRef.current = queueUnreadCountRefresh;
+
   const ActiveChips = () => {
     const chips: { key: string; label: string }[] = [];
     if (activeSort !== 'newest') chips.push({ key: 'sort', label: SORT_OPTIONS.find(s => s.key === activeSort)?.label || '' });
@@ -509,12 +651,14 @@ export default function Home() {
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 16, paddingVertical: 6 }}>
           {chips.map(chip => (
             <TouchableOpacity key={chip.key} style={styles.activeChip} onPress={() => removeChip(chip.key)}>
-              <Text style={styles.activeChipText}>{chip.label}</Text>
+              {/* ✨ TRANSLATE ACTIVE FILTER CHIPS ✨ */}
+              <Text style={styles.activeChipText}>{translateUGC(chip.label)}</Text>
               <Ionicons name="close" size={13} color="#fff" style={{ marginLeft: 4 }} />
             </TouchableOpacity>
           ))}
           <TouchableOpacity style={styles.clearAllChip} onPress={clearAllFilters}>
-            <Text style={styles.clearAllChipText}>Clear all</Text>
+            {/* ✨ TRANSLATE CLEAR ALL ✨ */}
+            <Text style={styles.clearAllChipText}>{t('clear_filters')}</Text>
           </TouchableOpacity>
         </ScrollView>
       </View>
@@ -543,15 +687,18 @@ export default function Home() {
               />
             </TouchableOpacity>
           </View>
-          <Text style={styles.title} numberOfLines={1}>{item.title}</Text>
+          {/* ✨ TRANSLATE AD TITLE ✨ */}
+          <Text style={styles.title} numberOfLines={1}>{translateUGC(item.title)}</Text>
           {item.condition && item.condition !== 'All' && (
             <View style={styles.conditionBadge}>
-              <Text style={styles.conditionBadgeText}>{item.condition}</Text>
+              {/* ✨ TRANSLATE CONDITION ✨ */}
+              <Text style={styles.conditionBadgeText}>{translateUGC(item.condition)}</Text>
             </View>
           )}
           <View style={styles.locationRow}>
             <Ionicons name="location-outline" size={12} color="#666" />
-            <Text style={styles.location} numberOfLines={1}>{item.location}</Text>
+            {/* ✨ TRANSLATE LOCATION ✨ */}
+            <Text style={styles.location} numberOfLines={1}>{translateUGC(item.location)}</Text>
           </View>
         </View>
       </TouchableOpacity>
@@ -564,9 +711,10 @@ export default function Home() {
   return (
     <View style={styles.container}>
 
-      {/* ── HEADER ────────────────────────────── */}
+    {/* ── HEADER ────────────────────────────── */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Boltzy</Text>
+        {/* ✨ TRANSLATE BOLTZY LOGO ✨ */}
+        <Text style={styles.headerTitle}>{t('app_title')}</Text>
         <View style={{ flexDirection: 'row', gap: 16, alignItems: 'center' }}>
           {(Platform.OS === 'web' || width > 768) && (
             <>
@@ -584,9 +732,15 @@ export default function Home() {
               </TouchableOpacity>
             </>
           )}
+          
           <TouchableOpacity onPress={() => setIsHelpVisible(true)}>
             <Ionicons name="help-circle-outline" size={26} color="#000" />
           </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => router.push('/profile' as any)}>
+            <Ionicons name="settings-outline" size={28} color="#000" />
+          </TouchableOpacity>
+
           <TouchableOpacity onPress={openProfileModal}>
             <Ionicons name="person-circle-outline" size={28} color="#000" />
           </TouchableOpacity>
@@ -597,8 +751,9 @@ export default function Home() {
       <View style={styles.locationSelectorBar}>
         <TouchableOpacity style={styles.locationSelectorBtn} onPress={() => setIsLocationModalVisible(true)}>
           <Ionicons name="location" size={20} color="#000" />
+          {/* ✨ TRANSLATE ACTIVE LOCATION ✨ */}
           <Text style={styles.locationSelectorText} numberOfLines={1}>
-            {activeLocation === 'Auto' ? (userArea || userCity || 'Auto Location') : activeLocation}
+            {translateUGC(activeLocation === 'Auto' ? (userArea || userCity || 'Auto (My Location)') : activeLocation)}
           </Text>
           <Ionicons name="chevron-down" size={16} color="#666" />
         </TouchableOpacity>
@@ -609,9 +764,10 @@ export default function Home() {
         <View style={styles.searchRow}>
           <View style={styles.searchContainer}>
             <Ionicons name="search" size={20} color="#999" style={{ marginRight: 10 }} />
+            {/* ✨ TRANSLATE SEARCH PLACEHOLDER ✨ */}
             <TextInput
               style={styles.searchInput}
-              placeholder="Find cars, phones, jobs and more..."
+              placeholder={t('home_search')}
               value={searchQuery}
               onChangeText={handleSearch}
             />
@@ -620,7 +776,6 @@ export default function Home() {
                 <Ionicons name="close-circle" size={20} color="#ccc" />
               </TouchableOpacity>
             )}
-            {/* Voice search mic */}
             <TouchableOpacity
               onPress={isListening ? stopVoiceSearch : startVoiceSearch}
               style={[styles.micBtn, isListening && styles.micBtnActive]}
@@ -630,7 +785,6 @@ export default function Home() {
             </TouchableOpacity>
           </View>
 
-          {/* Filter/Sort Button */}
           <TouchableOpacity style={[styles.filterBtn, activeFilterCount > 0 && styles.filterBtnActive]} onPress={openFilterModal}>
             <Ionicons name="options" size={20} color={activeFilterCount > 0 ? '#fff' : '#000'} />
             {activeFilterCount > 0 && (
@@ -650,10 +804,11 @@ export default function Home() {
             <View style={styles.voiceMicCircle}>
               <Ionicons name="mic" size={36} color="#fff" />
             </View>
-            <Text style={styles.voiceListeningText}>Listening...</Text>
-            <Text style={styles.voiceHintText}>Speak now — say what you're looking for</Text>
+            {/* ✨ TRANSLATE VOICE MODAL TEXT ✨ */}
+            <Text style={styles.voiceListeningText}>{t('Listening...')}</Text>
+            <Text style={styles.voiceHintText}>{t("Speak now — say what you're looking for")}</Text>
             <TouchableOpacity style={styles.voiceCancelBtn} onPress={stopVoiceSearch}>
-              <Text style={styles.voiceCancelText}>Cancel</Text>
+              <Text style={styles.voiceCancelText}>{t('Cancel')}</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
@@ -668,7 +823,10 @@ export default function Home() {
               onPress={() => onCategoryPress(cat)}
               style={[styles.categoryCapsule, selectedCategory === cat && styles.categoryCapsuleSelected]}
             >
-              <Text style={[styles.categoryText, selectedCategory === cat && styles.categoryTextSelected]}>{cat}</Text>
+              {/* ✨ TRANSLATE CATEGORY TABS ✨ */}
+              <Text style={[styles.categoryText, selectedCategory === cat && styles.categoryTextSelected]}>
+                {t(`cat_${cat}`)}
+              </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -681,7 +839,8 @@ export default function Home() {
       {!loading && filteredListings.length > 0 && (
         <View style={styles.scopeBanner}>
           <Ionicons name="information-circle-outline" size={14} color="#666" />
-          <Text style={styles.scopeText}>{feedScopeLabel}</Text>
+          {/* ✨ TRANSLATE DYNAMIC SCOPE BANNER ✨ */}
+          <Text style={styles.scopeText}>{translateUGC(feedScopeLabel)}</Text>
           {activeFilterCount > 0 && (
             <Text style={styles.scopeFilterNote}> · {filteredListings.length} results</Text>
           )}
@@ -696,18 +855,19 @@ export default function Home() {
           <View style={styles.emptyIconWrapper}>
             <Ionicons name="search-outline" size={44} color="#ccc" />
           </View>
-          <Text style={styles.emptyTitle}>No results found</Text>
-          <Text style={styles.emptySubtitle}>Try adjusting your filters or search term</Text>
+          {/* ✨ TRANSLATE EMPTY STATE TEXT ✨ */}
+          <Text style={styles.emptyTitle}>{t('no_results')}</Text>
+          <Text style={styles.emptySubtitle}>{t('Try adjusting your filters or search term')}</Text>
           <View style={styles.emptyActions}>
             {activeFilterCount > 0 && (
               <TouchableOpacity style={styles.emptyActionBtn} onPress={clearAllFilters}>
                 <Ionicons name="options" size={16} color="#007AFF" />
-                <Text style={styles.emptyActionText}>Clear filters</Text>
+                <Text style={styles.emptyActionText}>{t('clear_filters')}</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity style={[styles.emptyActionBtn, { backgroundColor: '#f0f0f0' }]} onPress={() => updateLocation('All India')}>
               <Ionicons name="earth" size={16} color="#000" />
-              <Text style={[styles.emptyActionText, { color: '#000' }]}>Search all of India</Text>
+              <Text style={[styles.emptyActionText, { color: '#000' }]}>{t('all_india')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -721,8 +881,8 @@ export default function Home() {
           renderItem={renderItem}
           contentContainerStyle={styles.listContainer}
           showsVerticalScrollIndicator={false}
-          onRefresh={fetchListings}
-          refreshing={loading}
+          onRefresh={handleManualRefresh}
+          refreshing={refreshing}
           extraData={savedIds}
         />
       )}
@@ -732,7 +892,8 @@ export default function Home() {
         <View style={styles.bottomTabBar}>
           <TouchableOpacity style={styles.tabItem} onPress={() => {}}>
             <Ionicons name="home" size={24} color="#000" />
-            <Text style={[styles.tabText, { color: '#000', fontWeight: 'bold' }]}>Home</Text>
+            {/* ✨ TRANSLATE BOTTOM TABS ✨ */}
+            <Text style={[styles.tabText, { color: '#000', fontWeight: 'bold' }]}>{t('tab_home')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.tabItem} onPress={() => router.push('/chats' as any)}>
             <View>
@@ -743,65 +904,64 @@ export default function Home() {
                 </View>
               )}
             </View>
-            <Text style={styles.tabText}>Chats</Text>
+            <Text style={styles.tabText}>{t('tab_chats')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.tabItemPost} onPress={() => router.push('/post')}>
             <View style={styles.postTabCircle}><Ionicons name="add" size={32} color="#fff" /></View>
           </TouchableOpacity>
           <TouchableOpacity style={styles.tabItem} onPress={() => router.push('/saved' as any)}>
             <Ionicons name="heart-outline" size={24} color="#666" />
-            <Text style={styles.tabText}>Saved</Text>
+            <Text style={styles.tabText}>{t('tab_saved')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.tabItem} onPress={() => router.push('/my-ads' as any)}>
             <Ionicons name="list-outline" size={24} color="#666" />
-            <Text style={styles.tabText}>My Ads</Text>
+            <Text style={styles.tabText}>{t('tab_my_ads')}</Text>
           </TouchableOpacity>
         </View>
       )}
 
       {/* ════════════════════════════════════════
-          FILTER & SORT MODAL  (new)
+          FILTER & SORT MODAL  
       ════════════════════════════════════════ */}
       <Modal visible={isFilterModalVisible} transparent animationType="slide">
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setIsFilterModalVisible(false)} />
           <View style={styles.filterModalCard}>
 
-            {/* Handle bar */}
             <View style={styles.modalHandle} />
 
-            {/* Header */}
             <View style={styles.filterModalHeader}>
-              <Text style={styles.filterModalTitle}>Filter & Sort</Text>
+              {/* ✨ TRANSLATE MODAL HEADER ✨ */}
+              <Text style={styles.filterModalTitle}>{t('sort_filter')}</Text>
               <TouchableOpacity onPress={() => setIsFilterModalVisible(false)} style={styles.filterModalClose}>
                 <Ionicons name="close" size={22} color="#000" />
               </TouchableOpacity>
             </View>
 
-            {/* Tab switcher */}
             <View style={styles.filterTabRow}>
               <TouchableOpacity
                 style={[styles.filterTab, filterTab === 'sort' && styles.filterTabActive]}
                 onPress={() => setFilterTab('sort')}
               >
                 <Ionicons name="swap-vertical" size={16} color={filterTab === 'sort' ? '#fff' : '#666'} style={{ marginRight: 6 }} />
-                <Text style={[styles.filterTabText, filterTab === 'sort' && styles.filterTabTextActive]}>Sort</Text>
+                {/* ✨ TRANSLATE SORT TAB ✨ */}
+                <Text style={[styles.filterTabText, filterTab === 'sort' && styles.filterTabTextActive]}>{t('Sort')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.filterTab, filterTab === 'filter' && styles.filterTabActive]}
                 onPress={() => setFilterTab('filter')}
               >
                 <Ionicons name="options" size={16} color={filterTab === 'filter' ? '#fff' : '#666'} style={{ marginRight: 6 }} />
-                <Text style={[styles.filterTabText, filterTab === 'filter' && styles.filterTabTextActive]}>Filters</Text>
+                {/* ✨ TRANSLATE FILTER TAB ✨ */}
+                <Text style={[styles.filterTabText, filterTab === 'filter' && styles.filterTabTextActive]}>{t('filter')}</Text>
               </TouchableOpacity>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
-
-              {/* ── SORT TAB ────────────────────── */}
               {filterTab === 'sort' && (
                 <View style={styles.filterSection}>
-                  <Text style={styles.filterSectionTitle}>Sort By</Text>
+                  {/* ✨ TRANSLATE SORT BY ✨ */}
+                  <Text style={styles.filterSectionTitle}>{t('sort_by')}</Text>
                   {SORT_OPTIONS.map((opt) => (
                     <TouchableOpacity
                       key={opt.key}
@@ -811,9 +971,10 @@ export default function Home() {
                       <View style={[styles.sortIconWrap, stagedSort === opt.key && styles.sortIconWrapActive]}>
                         <Ionicons name={opt.icon as any} size={18} color={stagedSort === opt.key ? '#fff' : '#555'} />
                       </View>
-                      <Text style={[styles.sortLabel, stagedSort === opt.key && styles.sortLabelActive]}>
-                        {opt.label}
-                      </Text>
+                      {/* ✨ TRANSLATE SORT LABELS ✨ */}
+                     <Text style={[styles.sortLabel, stagedSort === opt.key && styles.sortLabelActive]}>
+    {t(opt.label)} 
+  </Text>
                       {stagedSort === opt.key
                         ? <Ionicons name="checkmark-circle" size={22} color="#007AFF" style={{ marginLeft: 'auto' }} />
                         : <View style={styles.radioUnchecked} />
@@ -823,12 +984,11 @@ export default function Home() {
                 </View>
               )}
 
-              {/* ── FILTER TAB ──────────────────── */}
               {filterTab === 'filter' && (
                 <>
-                  {/* Price Range */}
                   <View style={styles.filterSection}>
-                    <Text style={styles.filterSectionTitle}>Price Range (₹)</Text>
+                    {/* ✨ TRANSLATE PRICE RANGE ✨ */}
+                    <Text style={styles.filterSectionTitle}>{t('price_range')}</Text>
                     <View style={styles.priceInputRow}>
                       <View style={styles.priceInputWrap}>
                         <Text style={styles.priceInputLabel}>Min</Text>
@@ -852,7 +1012,6 @@ export default function Home() {
                         />
                       </View>
                     </View>
-                    {/* Quick presets */}
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 12 }}>
                       <View style={{ flexDirection: 'row', gap: 8 }}>
                         {[['Under ₹500','','500'],['₹500–₹2K','500','2000'],['₹2K–₹10K','2000','10000'],['₹10K–₹50K','10000','50000'],['₹50K+','50000','']].map(([label, mn, mx]) => (
@@ -861,16 +1020,17 @@ export default function Home() {
                             style={[styles.presetChip, stagedPriceMin === mn && stagedPriceMax === mx && styles.presetChipActive]}
                             onPress={() => { setStagedPriceMin(mn); setStagedPriceMax(mx); }}
                           >
-                            <Text style={[styles.presetChipText, stagedPriceMin === mn && stagedPriceMax === mx && styles.presetChipTextActive]}>{label}</Text>
+                            {/* ✨ TRANSLATE PRESET CHIPS ✨ */}
+                            <Text style={[styles.presetChipText, stagedPriceMin === mn && stagedPriceMax === mx && styles.presetChipTextActive]}>{translateUGC(label)}</Text>
                           </TouchableOpacity>
                         ))}
                       </View>
                     </ScrollView>
                   </View>
 
-                  {/* Condition */}
                   <View style={styles.filterSection}>
-                    <Text style={styles.filterSectionTitle}>Condition</Text>
+                    {/* ✨ TRANSLATE CONDITION ✨ */}
+                    <Text style={styles.filterSectionTitle}>{t('condition')}</Text>
                     <View style={styles.conditionGrid}>
                       {CONDITIONS.map((c) => (
                         <TouchableOpacity
@@ -878,22 +1038,24 @@ export default function Home() {
                           style={[styles.conditionChip, stagedCondition === c && styles.conditionChipActive]}
                           onPress={() => setStagedCondition(c)}
                         >
-                          <Text style={[styles.conditionChipText, stagedCondition === c && styles.conditionChipTextActive]}>{c}</Text>
+                          {/* ✨ TRANSLATE CONDITIONS ✨ */}
+                          <Text style={[styles.conditionChipText, stagedCondition === c && styles.conditionChipTextActive]}>{translateUGC(c)}</Text>
                         </TouchableOpacity>
                       ))}
                     </View>
                   </View>
 
-                  {/* Posted Within */}
                   <View style={[styles.filterSection, { borderBottomWidth: 0 }]}>
-                    <Text style={styles.filterSectionTitle}>Posted Within</Text>
+                    {/* ✨ TRANSLATE POSTED WITHIN ✨ */}
+                    <Text style={styles.filterSectionTitle}>{t('posted_within')}</Text>
                     {POSTED_WITHIN.map((pw) => (
                       <TouchableOpacity
                         key={pw}
                         style={[styles.postedRow, stagedPostedWithin === pw && styles.postedRowActive]}
                         onPress={() => setStagedPostedWithin(pw)}
                       >
-                        <Text style={[styles.postedLabel, stagedPostedWithin === pw && styles.postedLabelActive]}>{pw}</Text>
+                        {/* ✨ TRANSLATE POSTED WITHIN OPTIONS ✨ */}
+                        <Text style={[styles.postedLabel, stagedPostedWithin === pw && styles.postedLabelActive]}>{translateUGC(pw)}</Text>
                         {stagedPostedWithin === pw
                           ? <Ionicons name="checkmark-circle" size={22} color="#007AFF" />
                           : <View style={styles.radioUnchecked} />
@@ -907,13 +1069,14 @@ export default function Home() {
               <View style={{ height: 20 }} />
             </ScrollView>
 
-            {/* Footer */}
             <View style={styles.filterModalFooter}>
               <TouchableOpacity style={styles.resetBtn} onPress={resetFilterModal}>
-                <Text style={styles.resetBtnText}>Reset</Text>
+                {/* ✨ TRANSLATE RESET BUTTON ✨ */}
+                <Text style={styles.resetBtnText}>{t('reset')}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.applyBtn} onPress={applyFilterModal}>
-                <Text style={styles.applyBtnText}>Apply Filters</Text>
+                {/* ✨ TRANSLATE APPLY BUTTON ✨ */}
+                <Text style={styles.applyBtnText}>{t('apply_filters')}</Text>
               </TouchableOpacity>
             </View>
 
@@ -922,13 +1085,14 @@ export default function Home() {
       </Modal>
 
       {/* ════════════════════════════════════════
-          PROFILE MODAL  (unchanged)
+          PROFILE MODAL 
       ════════════════════════════════════════ */}
       <Modal visible={isProfileMenuVisible} transparent animationType="fade">
         <TouchableOpacity style={styles.fullScreenModalOverlay} activeOpacity={1} onPress={() => setIsProfileMenuVisible(false)}>
           <TouchableOpacity activeOpacity={1} style={styles.fullProfileCard}>
             <View style={styles.profileModalHeader}>
-              <Text style={styles.profileModalTitle}>Account Details</Text>
+              {/* ✨ TRANSLATE ACC DETAILS ✨ */}
+              <Text style={styles.profileModalTitle}>{t('acc_details')}</Text>
               <TouchableOpacity onPress={() => setIsProfileMenuVisible(false)}>
                 <Ionicons name="close" size={28} color="#000" />
               </TouchableOpacity>
@@ -943,9 +1107,21 @@ export default function Home() {
                     : <Text style={styles.profileAvatarTextLarge}>{profileData?.name ? profileData.name.charAt(0).toUpperCase() : 'U'}</Text>
                   }
                 </View>
-                <Text style={styles.profileModalName}>{profileData?.name || 'Setup your name'}</Text>
+                {/* ✨ TRANSLATE FALLBACK NAME ✨ */}
+                <Text style={styles.profileModalName}>{profileData?.name || t('Setup your name')}</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 24 }}>
-                  <Text style={styles.profileModalUsername}>@{profileData?.username || 'username'}</Text>
+                  {(() => {
+                    const handle = resolveProfilePublicHandle(
+                      profileData?.username,
+                      profileData?.name,
+                      profileData?.phone,
+                    );
+                    return handle ? (
+                      <Text style={styles.profileModalUsername}>@{handle}</Text>
+                    ) : (
+                      <Text style={[styles.profileModalUsername, { color: '#999' }]}>{t('profile_no_username')}</Text>
+                    );
+                  })()}
                   <TouchableOpacity style={{ marginLeft: 8, padding: 4 }} onPress={() => { setIsProfileMenuVisible(false); router.push('/profile' as any); }}>
                     <Ionicons name="pencil" size={16} color="#007AFF" />
                   </TouchableOpacity>
@@ -953,22 +1129,24 @@ export default function Home() {
                 <View style={styles.profileDetailsBox}>
                   <View style={styles.profileDetailRow}>
                     <Ionicons name="mail" size={20} color="#666" />
-                    <Text style={styles.profileDetailText}>{profileData?.email || 'No email attached'}</Text>
+                    <Text style={styles.profileDetailText}>{profileData?.email || t('profile_no_email')}</Text>
                   </View>
                   <View style={styles.profileDetailRow}>
                     <Ionicons name="call" size={20} color="#666" />
-                    <Text style={styles.profileDetailText}>{profileData?.phone || 'No phone number'}</Text>
+                    <Text style={styles.profileDetailText}>{profileData?.phone || t('profile_no_phone')}</Text>
                   </View>
                 </View>
                 <View style={styles.profileActionDivider} />
                 <TouchableOpacity style={styles.profileActionBtn} onPress={handleLogout}>
                   <View style={styles.profileActionIconWrap}><Ionicons name="log-out" size={22} color="#000" /></View>
-                  <Text style={styles.profileActionText}>Logout</Text>
+                  {/* ✨ TRANSLATE LOGOUT ✨ */}
+                  <Text style={styles.profileActionText}>{t('logout')}</Text>
                   <Ionicons name="chevron-forward" size={20} color="#ccc" style={{ marginLeft: 'auto' }} />
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.profileActionBtnDanger} onPress={handleDeleteAccount}>
                   <View style={[styles.profileActionIconWrap, { backgroundColor: '#ffebee' }]}><Ionicons name="trash" size={22} color="#FF3B30" /></View>
-                  <Text style={styles.profileActionTextDanger}>Delete Account</Text>
+                  {/* ✨ TRANSLATE DELETE ACC ✨ */}
+                  <Text style={styles.profileActionTextDanger}>{t('delete_acc')}</Text>
                   <Ionicons name="chevron-forward" size={20} color="#ccc" style={{ marginLeft: 'auto' }} />
                 </TouchableOpacity>
               </ScrollView>
@@ -978,64 +1156,73 @@ export default function Home() {
       </Modal>
 
       {/* ════════════════════════════════════════
-          LOCATION MODAL  (unchanged)
+          LOCATION MODAL 
       ════════════════════════════════════════ */}
       <Modal visible={isLocationModalVisible} transparent animationType="slide">
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
           <View style={styles.locationModalCard}>
             <View style={styles.helpHeader}>
-              <Text style={styles.helpTitle}>Select City or State</Text>
+              {/* ✨ TRANSLATE SELECT LOCATION ✨ */}
+              <Text style={styles.helpTitle}>{t('select_loc')}</Text>
               <TouchableOpacity onPress={() => setIsLocationModalVisible(false)}>
                 <Ionicons name="close" size={24} color="#000" />
               </TouchableOpacity>
             </View>
             <View style={styles.locationSearchBox}>
               <Ionicons name="search" size={20} color="#999" style={{ marginRight: 10 }} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Type any city or state..."
-                value={locationSearchInput}
-                onChangeText={setLocationSearchInput}
-                onSubmitEditing={() => updateLocation(locationSearchInput)}
-                returnKeyType="search"
-                autoFocus
-              />
-              <TouchableOpacity onPress={() => updateLocation(locationSearchInput)} style={styles.applyLocBtn}>
-                <Text style={styles.applyLocText}>Apply</Text>
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.sectionSubTitle}>Popular Locations</Text>
-            <View style={styles.quickCitiesWrapper}>
-              {QUICK_CITIES.map((city) => (
-                <TouchableOpacity key={city} style={styles.quickCityChip} onPress={() => updateLocation(city)}>
-                  {city === 'Auto (My Location)' && <Ionicons name="locate" size={14} color="#007AFF" style={{ marginRight: 4 }} />}
-                  <Text style={[styles.quickCityText, city === 'Auto (My Location)' && { color: '#007AFF', fontWeight: 'bold' }]}>{city}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+              {/* ✨ TRANSLATE LOCATION INPUT PLACEHOLDER ✨ */}
+             <TextInput
+    style={styles.searchInput}
+    placeholder={t('type_city_state')} // ✨ Translated Placeholder
+    value={locationSearchInput}
+    onChangeText={setLocationSearchInput}
+    onSubmitEditing={() => updateLocation(locationSearchInput)}
+    returnKeyType="search"
+    autoFocus
+  />
+  <TouchableOpacity onPress={() => updateLocation(locationSearchInput)} style={styles.applyLocBtn}>
+    <Text style={styles.applyLocText}>{t('apply')}</Text> {/* ✨ Translated Apply */}
+  </TouchableOpacity>
+</View>
+
+<Text style={styles.sectionSubTitle}>{t('pop_loc')}</Text>
+<View style={styles.quickCitiesWrapper}>
+  {QUICK_CITIES.map((city) => (
+    <TouchableOpacity key={city} style={styles.quickCityChip} onPress={() => updateLocation(city)}>
+      {city === 'Auto (My Location)' && <Ionicons name="locate" size={14} color="#007AFF" style={{ marginRight: 4 }} />}
+      {/* ✨ OLD: {translateUGC(city)} ---> NEW: {t(city)} ✨ */}
+      <Text style={[styles.quickCityText, city === 'Auto (My Location)' && { color: '#007AFF', fontWeight: 'bold' }]}>
+        {t(city)}
+      </Text>
+    </TouchableOpacity>
+  ))}
+</View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
 
       {/* ════════════════════════════════════════
-          HELP MODAL  (unchanged)
+          HELP MODAL 
       ════════════════════════════════════════ */}
       <Modal visible={isHelpVisible} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setIsHelpVisible(false)}>
           <View style={styles.helpMenuCard}>
             <View style={styles.helpHeader}>
-              <Text style={styles.helpTitle}>Boltzy Support</Text>
+              {/* ✨ TRANSLATE HELP TITLE ✨ */}
+              <Text style={styles.helpTitle}>{t('support')}</Text>
               <TouchableOpacity onPress={() => setIsHelpVisible(false)}>
                 <Ionicons name="close" size={24} color="#000" />
               </TouchableOpacity>
             </View>
             <TouchableOpacity style={styles.helpOption} onPress={() => { setIsHelpVisible(false); Alert.alert('Safety Tips','1. Never pay in advance.\n2. Meet in public places.\n3. Inspect items before buying.'); }}>
               <View style={[styles.helpIconCircle, { backgroundColor: '#4CAF50' }]}><Ionicons name="shield-checkmark" size={20} color="#fff" /></View>
-              <Text style={styles.helpOptionText}>Trust & Safety Tips</Text>
+              {/* ✨ TRANSLATE SAFETY TIPS ✨ */}
+              <Text style={styles.helpOptionText}>{t('safety_tips')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.helpOption} onPress={() => { setIsHelpVisible(false); Alert.alert('Contact Support','Email us at support@boltzy.in for any disputes or account issues.'); }}>
               <View style={[styles.helpIconCircle, { backgroundColor: '#2196F3' }]}><Ionicons name="mail" size={20} color="#fff" /></View>
-              <Text style={styles.helpOptionText}>Email Support</Text>
+              {/* ✨ TRANSLATE EMAIL SUPPORT ✨ */}
+              <Text style={styles.helpOptionText}>{t('email_support')}</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>

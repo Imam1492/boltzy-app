@@ -3,18 +3,25 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, ScrollView, Image } from 'react-native';
 import { supabase } from '../supabase';
+import { getCurrentUser } from '../utils/auth';
 import * as ImagePicker from 'expo-image-picker';
 import { decode } from 'base64-arraybuffer';
+import { useLanguage } from '../context/LanguageContext'; 
+
+const LANGUAGE_OPTIONS = [
+  { id: 'en', nativeLabel: 'English' },
+  { id: 'hi', nativeLabel: 'हिन्दी' },
+  { id: 'ur', nativeLabel: 'اردو' },
+] as const;
 
 export default function EditProfile() {
   const router = useRouter();
+  const { lang, setLang, t } = useLanguage();
+  
   const [displayName, setDisplayName] = useState('');
   const [realName, setRealName] = useState('');
-  
-  // New avatar states
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [avatarBase64, setAvatarBase64] = useState<string | null>(null);
-  
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -22,13 +29,13 @@ export default function EditProfile() {
 
   const fetchProfile = async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getCurrentUser();
     if (!user) return;
     const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
     if (data) {
       setDisplayName(data.display_name || '');
       setRealName(data.real_name || '');
-      setAvatarUri(data.avatar_url || null); // Load existing avatar
+      setAvatarUri(data.avatar_url || null);
     }
     setLoading(false);
   };
@@ -37,7 +44,7 @@ export default function EditProfile() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      aspect: [1, 1], // Forces a perfect square!
+      aspect: [1, 1],
       quality: 0.5,
       base64: true,
     });
@@ -50,16 +57,16 @@ export default function EditProfile() {
 
   const handleSave = async () => {
     if (!displayName.trim() || !realName.trim()) {
-      Alert.alert("Error", "Username and Real Name are required.");
+      if (Platform.OS === 'web') window.alert("Username and Real Name are required.");
+      else Alert.alert("Error", "Username and Real Name are required.");
       return;
     }
     setSaving(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getCurrentUser();
     if (!user) return;
 
-    let uploadedAvatarUrl = avatarUri; // Keep existing if not changed
+    let uploadedAvatarUrl = avatarUri;
 
-    // Upload new image if one was selected
     if (avatarBase64) {
       const fileName = `avatar-${user.id}-${Date.now()}.jpg`;
       const { error: uploadError } = await supabase.storage
@@ -70,7 +77,7 @@ export default function EditProfile() {
         const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(fileName);
         uploadedAvatarUrl = publicUrlData.publicUrl;
       } else {
-        Alert.alert("Image Error", "Could not upload profile picture.");
+        console.error(uploadError);
       }
     }
 
@@ -81,20 +88,36 @@ export default function EditProfile() {
     }).eq('id', user.id);
     
     setSaving(false);
-    if (error) Alert.alert("Error", "Update failed.");
-    else Alert.alert("Success", "Profile updated successfully!");
+    
+    // WEB SAFE ALERTS
+    if (error) {
+      console.error(error);
+      if (Platform.OS === 'web') window.alert("Update failed! Check console.");
+      else Alert.alert("Error", "Update failed.");
+    } else {
+      if (Platform.OS === 'web') window.alert("Profile updated successfully!");
+      else Alert.alert("Success", "Profile updated successfully!");
+    }
   };
 
   const handleDeleteAccount = () => {
-    Alert.alert("Delete Account?", "Account deactivated for 30 days.", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: async () => {
-          const { data: { user } } = await supabase.auth.getUser();
-          await supabase.from('profiles').update({ deleted_at: new Date().toISOString() }).eq('id', user?.id);
-          await supabase.auth.signOut();
-          router.replace('/');
-      }}
-    ]);
+    if (Platform.OS === 'web') {
+      if (window.confirm("Account will be deactivated for 30 days. Proceed?")) {
+        executeDelete();
+      }
+    } else {
+      Alert.alert("Delete Account?", "Account deactivated for 30 days.", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: executeDelete }
+      ]);
+    }
+  };
+
+  const executeDelete = async () => {
+    const user = await getCurrentUser();
+    await supabase.from('profiles').update({ deleted_at: new Date().toISOString() }).eq('id', user?.id);
+    await supabase.auth.signOut();
+    router.replace('/');
   };
 
   if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#000" /></View>;
@@ -103,13 +126,12 @@ export default function EditProfile() {
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color="#000" /></TouchableOpacity>
-        <Text style={styles.headerTitle}>Boltzy Identity</Text>
+        <Text style={styles.headerTitle}>{t('profile_title')}</Text>
         <View style={{ width: 28 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         
-        {/* AVATAR PICKER */}
         <TouchableOpacity style={styles.avatarContainer} onPress={pickAvatar}>
           <View style={styles.avatarCircle}>
             {avatarUri ? (
@@ -123,21 +145,38 @@ export default function EditProfile() {
           </View>
         </TouchableOpacity>
 
-        <Text style={styles.label}>Public Username</Text>
+        <View style={styles.highlightBox}>
+          <Text style={[styles.label, { marginTop: 0 }]}>{t('app_language')}</Text>
+          <View style={styles.languageContainer}>
+            {LANGUAGE_OPTIONS.map((l) => (
+              <TouchableOpacity
+                key={l.id}
+                style={[styles.languageChip, lang === l.id && styles.languageChipActive]}
+                onPress={() => setLang(l.id)}
+              >
+                <Text style={[styles.languageText, lang === l.id && styles.languageTextActive]}>
+                  {l.nativeLabel}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        <Text style={styles.label}>{t('pub_user')}</Text>
         <TextInput style={styles.input} value={displayName} onChangeText={setDisplayName} />
 
-        <Text style={styles.label}>Real Name (Private)</Text>
+        <Text style={styles.label}>{t('real_name')}</Text>
         <TextInput style={styles.input} value={realName} onChangeText={setRealName} />
 
         <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={saving}>
-          {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveButtonText}>Save Changes</Text>}
+          {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveButtonText}>{t('save_btn')}</Text>}
         </TouchableOpacity>
 
         <View style={styles.dangerZone}>
-          <Text style={styles.dangerTitle}>Danger Zone</Text>
+          <Text style={styles.dangerTitle}>{t('danger')}</Text>
           <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteAccount}>
             <Ionicons name="trash-outline" size={20} color="#FF3B30" />
-            <Text style={styles.deleteButtonText}>Delete Account</Text>
+            <Text style={styles.deleteButtonText}>{t('delete_acc')}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -151,20 +190,23 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 60, borderBottomWidth: 1, borderBottomColor: '#eee' },
   headerTitle: { fontSize: 20, fontWeight: 'bold' },
   content: { padding: 24 },
-  
-  // Avatar Styles
-  avatarContainer: { alignSelf: 'center', marginBottom: 30, position: 'relative' },
+  avatarContainer: { alignSelf: 'center', marginBottom: 20, position: 'relative' },
   avatarCircle: { width: 100, height: 100, borderRadius: 50, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   avatarImage: { width: '100%', height: '100%' },
   avatarText: { color: '#fff', fontSize: 40, fontWeight: 'bold' },
   editBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#007AFF', padding: 8, borderRadius: 20, borderWidth: 3, borderColor: '#fff' },
-  
-  label: { fontSize: 14, fontWeight: '700', marginBottom: 6, marginTop: 10 },
-  input: { height: 56, borderWidth: 1, borderColor: '#ddd', borderRadius: 12, paddingHorizontal: 16, fontSize: 16 },
-  saveButton: { height: 56, backgroundColor: '#000', borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginTop: 30 },
+  highlightBox: { backgroundColor: '#f9f9f9', padding: 16, borderRadius: 16, marginBottom: 20, borderWidth: 1, borderColor: '#eee' },
+  languageContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
+  languageChip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, backgroundColor: '#fff', borderWidth: 1, borderColor: '#ddd' },
+  languageChipActive: { backgroundColor: '#000', borderColor: '#000' },
+  languageText: { fontSize: 14, color: '#333' },
+  languageTextActive: { color: '#fff', fontWeight: 'bold' },
+  label: { fontSize: 14, fontWeight: '700', marginBottom: 6, marginTop: 10, color: '#333' },
+  input: { height: 56, borderWidth: 1, borderColor: '#ddd', borderRadius: 12, paddingHorizontal: 16, fontSize: 16, marginBottom: 15, backgroundColor: '#fff' },
+  saveButton: { height: 56, backgroundColor: '#000', borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
   saveButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
   dangerZone: { marginTop: 40, paddingTop: 20, borderTopWidth: 1, borderTopColor: '#eee' },
   dangerTitle: { fontSize: 14, fontWeight: '700', color: '#FF3B30', marginBottom: 12, textTransform: 'uppercase' },
   deleteButton: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  deleteButtonText: { color: '#FF3B30', fontSize: 16, fontWeight: '600' },
+  deleteButtonText: { color: '#FF3B30', fontSize: 16, fontWeight: '600' }
 });

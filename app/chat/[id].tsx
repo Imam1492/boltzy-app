@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, FlatList, TouchableOpacity,
   KeyboardAvoidingView, Platform, StyleSheet, ActivityIndicator,
-  Modal, Alert, Animated, Image,
+  Modal, Alert, Animated, Image, TouchableWithoutFeedback,
 } from 'react-native';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { supabase } from '../../supabase';
@@ -11,6 +11,9 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import * as Contacts from 'expo-contacts';
 import * as Linking from 'expo-linking';
+import { getCurrentUser } from '../../utils/auth';
+import { useLanguage } from '../../context/LanguageContext';
+import { getLocalizedListingField, getLocalizedMessageContent } from '../../utils/localizedContent';
 
 // ─── Star Picker ──────────────────────────────────────────────────────────────
 const StarPicker = ({ value, onChange }: { value: number; onChange: (v: number) => void }) => (
@@ -29,24 +32,42 @@ const RATING_LABELS: Record<number, string> = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ChatRoom() {
-  const { id: rawChatId } = useLocalSearchParams();
+  const {
+    id: rawChatId,
+    listing_id: rawListingId,
+    seller_id: rawSellerId,
+    listing_title: rawListingTitle,
+    listing_price: rawListingPrice,
+  } = useLocalSearchParams<{
+    id?: string | string[];
+    listing_id?: string | string[];
+    seller_id?: string | string[];
+    listing_title?: string | string[];
+    listing_price?: string | string[];
+  }>();
   const chatId = Array.isArray(rawChatId) ? rawChatId[0] : rawChatId;
+  const pendingListingId = Array.isArray(rawListingId) ? rawListingId[0] : rawListingId;
+  const pendingSellerId = Array.isArray(rawSellerId) ? rawSellerId[0] : rawSellerId;
+  const pendingListingTitle = Array.isArray(rawListingTitle) ? rawListingTitle[0] : rawListingTitle;
+  const pendingListingPrice = Array.isArray(rawListingPrice) ? rawListingPrice[0] : rawListingPrice;
   const router  = useRouter();
+  const { lang, t } = useLanguage();
 
   // ── Core state ─────────────────────────────────────────────────────────────
-  const [messages, setMessages]           = useState<any[]>([]);
-  const [newMessage, setNewMessage]       = useState('');
-  const [loading, setLoading]             = useState(true);
+  const [messages, setMessages]             = useState<any[]>([]);
+  const [newMessage, setNewMessage]         = useState('');
+  const [loading, setLoading]               = useState(true);
   const [uploadingImage, setUploadingImage] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId]   = useState<string | null>(null);
 
-  const flatListRef = useRef<FlatList>(null);
+  const flatListRef                         = useRef<FlatList>(null);
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
-  const [chatDetails, setChatDetails]     = useState<any>(null);
-  const [selectedMsg, setSelectedMsg]     = useState<any>(null);
-  const [isModalVisible, setModalVisible] = useState(false);
-  const [editingMsgId, setEditingMsgId]   = useState<string | null>(null);
-  const [pinnedMessage, setPinnedMessage] = useState<any>(null);
+  const [chatDetails, setChatDetails]       = useState<any>(null);
+  const [selectedMsg, setSelectedMsg]       = useState<any>(null);
+  const [isModalVisible, setModalVisible]   = useState(false);
+  const [editingMsgId, setEditingMsgId]     = useState<string | null>(null);
+  const [pinnedMessage, setPinnedMessage]   = useState<any>(null);
+  const lastMessagesFetchAtRef              = useRef(0);
 
   // ── Attach / Offer ─────────────────────────────────────────────────────────
   const [isAttachMenuVisible, setIsAttachMenuVisible] = useState(false);
@@ -66,15 +87,17 @@ export default function ChatRoom() {
   const [isOtherUserTyping, setIsOtherUserTyping] = useState(false);
   const [otherUserProfile, setOtherUserProfile]   = useState<any>(null);
 
-  // Two separate channel refs — messages vs presence/typing
   const msgChannelRef      = useRef<any>(null);
   const presenceChannelRef = useRef<any>(null);
   const typingTimeoutRef   = useRef<NodeJS.Timeout | number | null>(null);
   const isTypingRef        = useRef(false);
   const fadeAnim           = useRef(new Animated.Value(0.3)).current;
+  const currentUserIdRef   = useRef<string | null>(null);
+  const pinnedMessageIdRef = useRef<string | null>(null);
 
-  // Stable ref so channel callbacks always see latest userId without re-subscribing
-  const currentUserIdRef = useRef<string | null>(null);
+  // Refs for stable callbacks used inside realtime channel closures
+  const refetchMessagesRef = useRef<(uid?: string) => Promise<void>>(async () => {});
+  const forceMarkAsReadRef = useRef<(userId: string | undefined) => Promise<void>>(async () => {});
 
   // ── Trust Engine ───────────────────────────────────────────────────────────
   const [markSoldVisible, setMarkSoldVisible]   = useState(false);
@@ -83,6 +106,17 @@ export default function ChatRoom() {
   const [reviewText, setReviewText]             = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
   const [isSeller, setIsSeller]                 = useState(false);
+
+  // ── Chat Options Menu ──────────────────────────────────────────────────────
+  const dotsRef                               = useRef<View>(null);
+  const [chatMenuVisible, setChatMenuVisible] = useState(false);
+  const [chatMenuPos, setChatMenuPos]         = useState({ x: 0, y: 0 });
+
+  // ── In-chat Search ─────────────────────────────────────────────────────────
+  const [searchVisible, setSearchVisible]   = useState(false);
+  const [searchText, setSearchText]         = useState('');
+  const [searchMatchIdx, setSearchMatchIdx] = useState(0);
+  const searchInputRef                      = useRef<TextInput>(null);
 
   // ─────────────────────────────────────────────────────────────────────────
   //  TYPING BLINK ANIMATION
@@ -96,52 +130,244 @@ export default function ChatRoom() {
     } else {
       fadeAnim.setValue(1);
     }
-  }, [isOtherUserTyping]);
+  }, [fadeAnim, isOtherUserTyping]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  FIX 1 — GET USER ID IMMEDIATELY AT MOUNT
-  //  Previously currentUserId was set inside setupChat() which also fetches
-  //  messages and chat details. The channel useEffect depends on currentUserId
-  //  so there was a large gap between mount and channel subscription.
-  //  Now we fetch the user ID first in a dedicated fast effect so channels
-  //  are subscribed as soon as possible — before the heavier data loads.
+  //  STEP 1 — get user ID fast so channels can subscribe ASAP
   // ─────────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const initUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getCurrentUser();
       if (user) {
         setCurrentUserId(user.id);
         currentUserIdRef.current = user.id;
       }
     };
     initUser();
-  }, []); // runs once immediately on mount
+  }, []);
 
-  // Setup chat data whenever chatId is available
-  useEffect(() => { if (chatId) setupChat(); }, [chatId]);
+  useEffect(() => {
+    pinnedMessageIdRef.current = pinnedMessage ? String(pinnedMessage.id) : null;
+  }, [pinnedMessage]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  FIX 2 — TWO CLEAN CHANNELS
+  //  STEP 2 — define stable callbacks (refs kept in sync for channel closures)
+  // ─────────────────────────────────────────────────────────────────────────
+  const refetchMessages = useCallback(async (uid?: string) => {
+    if (!chatId || chatId === 'new') {
+      setMessages([]);
+      setPinnedMessage(null);
+      return;
+    }
+    try {
+      const myId = uid ?? currentUserIdRef.current;
+      const { data, error } = await supabase.from('messages').select('*')
+        .eq('chat_id', chatId).order('created_at', { ascending: false });
+      if (error) console.warn('[refetchMessages] error:', error.message);
+      if (data && myId) {
+        const visible = data.filter((m: any) => !m.deleted_by?.includes(myId));
+        setMessages(visible);
+        const activePin = visible.find((m: any) => m.is_pinned && new Date(m.pinned_until) > new Date());
+        setPinnedMessage(activePin ?? null);
+        lastMessagesFetchAtRef.current = Date.now();
+      }
+    } catch (e: any) {
+      console.error('[refetchMessages] unexpected error:', e?.message ?? e);
+    }
+  }, [chatId]);
+
+  const forceMarkAsRead = useCallback(async (userId: string | undefined) => {
+    if (!userId || !chatId || chatId === 'new') return;
+    await supabase.rpc('mark_chat_read', { p_chat_id: chatId, p_user_id: userId });
+  }, [chatId]);
+
+  useEffect(() => { refetchMessagesRef.current = refetchMessages; }, [refetchMessages]);
+  useEffect(() => { forceMarkAsReadRef.current = forceMarkAsRead; }, [forceMarkAsRead]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  STEP 3 — setupChat (called DIRECTLY, not via a ref)
   //
-  //  OLD: one channel mixing postgres_changes + broadcast + presence
-  //       → they interfere cross-platform (web↔mobile)
+  //  THE FIX: The previous version stored setupChat in a setupChatRef, then
+  //  called setupChatRef.current() from a separate useEffect. React runs
+  //  effects in declaration order, so the effect that *called* the ref fired
+  //  before the effect that *assigned* the real function to the ref. The ref
+  //  still held the initial empty `async () => {}`, so setupChat never ran
+  //  and the screen was permanently stuck on the loading spinner.
   //
-  //  NEW: two separate channels with a single purpose each
-  //    • msgChannel     → ONLY postgres_changes (messages + chat row updates)
-  //                       100% reliable on all platforms, no config options needed
-  //    • presenceChannel → ONLY broadcast (typing) + presence (online)
-  //                        ephemeral, best-effort, separate from message delivery
-  //
-  //  This runs as soon as currentUserId is set (which now happens fast via
-  //  the dedicated initUser effect above).
+  //  Solution: use setupChat as a useCallback and list it as a dependency of
+  //  the calling effect. React guarantees the callback is stable between
+  //  renders unless chatId/refetchMessages change, so this won't loop.
+  // ─────────────────────────────────────────────────────────────────────────
+  const setupChat = useCallback(async () => {
+    setLoading(true);
+    try {
+      const user = await getCurrentUser();
+      if (user && !currentUserIdRef.current) {
+        setCurrentUserId(user.id);
+        currentUserIdRef.current = user.id;
+      }
+      const uid = user?.id ?? currentUserIdRef.current;
+
+      if (chatId === 'new') {
+        if (!uid || !pendingListingId) {
+          Alert.alert('Chat Unavailable', 'We could not load this conversation. Please try again from the listing.');
+          router.back();
+          return;
+        }
+
+        const { data: listingData, error: listingError } = await supabase
+          .from('listings')
+          .select('*')
+          .eq('id', pendingListingId)
+          .maybeSingle();
+
+        if (listingError) {
+          console.warn('[setupChat] pending listing fetch error:', listingError.message);
+        }
+
+        const resolvedSellerId = listingData?.seller_id ?? pendingSellerId;
+        if (!resolvedSellerId) {
+          Alert.alert('Chat Unavailable', 'This listing is missing seller information.');
+          router.back();
+          return;
+        }
+
+        const { data: otherProfile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', resolvedSellerId)
+          .maybeSingle();
+
+        setOtherUserProfile(otherProfile ?? null);
+        setChatDetails({
+          id: 'new',
+          buyer_id: uid,
+          seller_id: resolvedSellerId,
+          listing_id: listingData?.id ?? pendingListingId,
+          is_sold: false,
+          review_submitted: false,
+          listings: {
+            id: listingData?.id ?? pendingListingId,
+            title: listingData?.title ?? pendingListingTitle ?? 'Listing',
+            price: listingData?.price ?? Number(pendingListingPrice || 0),
+            image_urls: listingData?.image_urls ?? [],
+            translations: listingData?.translations ?? {},
+          },
+        });
+        setIsSeller(uid === resolvedSellerId);
+        setMessages([]);
+        setPinnedMessage(null);
+        return;
+      }
+
+      const { data: cData, error: chatError } = await supabase
+        .from('chats')
+        .select('*, listings(*)')
+        .eq('id', chatId)
+        .single();
+
+      if (chatError) console.warn('[setupChat] chat fetch error:', chatError.message);
+
+      if (cData) {
+        setChatDetails(cData);
+        setIsSeller(uid === cData.seller_id);
+        const otherId = uid === cData.seller_id ? cData.buyer_id : cData.seller_id;
+        const { data: otherProfile } = await supabase
+          .from('profiles').select('*').eq('id', otherId).single();
+        if (otherProfile) setOtherUserProfile(otherProfile);
+        if (cData.is_sold && !cData.review_submitted && cData.buyer_id === uid) {
+          setTimeout(() => setRatingVisible(true), 700);
+        }
+      }
+
+      await refetchMessages(uid ?? undefined);
+
+      // mark_chat_read is non-critical — don't let it block or throw
+      if (uid && chatId && chatId !== 'new') {
+        supabase.rpc('mark_chat_read', { p_chat_id: chatId, p_user_id: uid }).then(
+          ({ error }) => { if (error) console.warn('[setupChat] mark_chat_read:', error.message); }
+        );
+      }
+    } catch (e: any) {
+      console.error('[setupChat] unexpected error:', e?.message ?? e);
+    } finally {
+      // ALWAYS clear the spinner — no matter what happened above
+      setLoading(false);
+    }
+  }, [
+    chatId,
+    pendingListingId,
+    pendingListingPrice,
+    pendingListingTitle,
+    pendingSellerId,
+    refetchMessages,
+    router,
+  ]);
+
+  // Call setupChat directly — no ref indirection needed here
+  useEffect(() => {
+    if (chatId) setupChat();
+  }, [chatId, setupChat]);
+
+  const resolveChatId = useCallback(async () => {
+    if (!chatId) return null;
+    if (chatId !== 'new') return chatId;
+
+    const buyerId = currentUserIdRef.current;
+    const listingId = pendingListingId ?? chatDetails?.listing_id;
+    const sellerId = pendingSellerId ?? chatDetails?.seller_id;
+
+    if (!buyerId || !listingId || !sellerId) {
+      Alert.alert('Chat Unavailable', 'We could not create this conversation. Please try again from the listing.');
+      return null;
+    }
+
+    const { data: existingChat, error: lookupError } = await supabase
+      .from('chats')
+      .select('id')
+      .eq('listing_id', listingId)
+      .eq('buyer_id', buyerId)
+      .eq('seller_id', sellerId)
+      .maybeSingle();
+
+    if (lookupError) {
+      Alert.alert('Chat Error', lookupError.message);
+      return null;
+    }
+
+    let resolvedChatId = existingChat?.id;
+
+    if (!resolvedChatId) {
+      const { data: newChat, error: createError } = await supabase
+        .from('chats')
+        .insert({
+          listing_id: listingId,
+          buyer_id: buyerId,
+          seller_id: sellerId,
+        })
+        .select('id')
+        .single();
+
+      if (createError) {
+        Alert.alert('Chat Error', createError.message);
+        return null;
+      }
+
+      resolvedChatId = newChat.id;
+    }
+
+    router.replace(`/chat/${resolvedChatId}` as any);
+    return resolvedChatId;
+  }, [chatDetails?.listing_id, chatDetails?.seller_id, chatId, pendingListingId, pendingSellerId, router]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  STEP 4 — realtime channels
   // ─────────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!currentUserId || !chatId) return;
+    if (!currentUserId || !chatId || chatId === 'new') return;
 
     const safe = String(chatId).replace(/[^a-zA-Z0-9]/g, '');
 
-    // ── Channel A: postgres_changes only ─────────────────────────────────────
-    // No broadcast, no presence config — just clean DB event delivery.
     const msgChannel = supabase.channel(`boltzy_msgs_${safe}`);
     msgChannelRef.current = msgChannel;
 
@@ -150,33 +376,30 @@ export default function ChatRoom() {
       filter: `chat_id=eq.${chatId}`,
     }, (payload: any) => {
       const myId = String(currentUserIdRef.current);
-
       if (payload.eventType === 'INSERT') {
         if (!payload.new.deleted_by?.includes(myId)) {
           setMessages((prev) => {
-            if (prev.some(m => String(m.id) === String(payload.new.id))) return prev;
+            if (prev.some((m: any) => String(m.id) === String(payload.new.id))) return prev;
             return [payload.new, ...prev];
           });
         }
-        if (String(payload.new.sender_id) !== myId) forceMarkAsRead(myId);
-
+        if (String(payload.new.sender_id) !== myId) forceMarkAsReadRef.current(myId);
       } else if (payload.eventType === 'UPDATE') {
         if (payload.new.deleted_by?.includes(myId)) {
-          setMessages((prev) => prev.filter(msg => String(msg.id) !== String(payload.new.id)));
+          setMessages((prev) => prev.filter((msg: any) => String(msg.id) !== String(payload.new.id)));
         } else {
-          setMessages((prev) => prev.map(msg =>
+          setMessages((prev) => prev.map((msg: any) =>
             String(msg.id) === String(payload.new.id) ? payload.new : msg
           ));
         }
         if (payload.new.is_pinned && new Date(payload.new.pinned_until) > new Date()) {
           setPinnedMessage(payload.new);
-        } else if (!payload.new.is_pinned && pinnedMessage?.id === payload.new.id) {
+        } else if (!payload.new.is_pinned && pinnedMessageIdRef.current === String(payload.new.id)) {
           setPinnedMessage(null);
         }
       }
     });
 
-    // Chat row changes (is_sold, review_submitted)
     msgChannel.on('postgres_changes', {
       event: 'UPDATE', schema: 'public', table: 'chats',
       filter: `id=eq.${chatId}`,
@@ -191,12 +414,8 @@ export default function ChatRoom() {
       }
     });
 
-    msgChannel.subscribe((status) => {
-      // Optionally log: console.log('msgChannel status:', status);
-    });
+    msgChannel.subscribe();
 
-    // ── Channel B: presence + broadcast (typing / online only) ───────────────
-    // Kept completely separate so its config cannot interfere with DB events.
     const presenceChannel = supabase.channel(`boltzy_presence_${safe}`, {
       config: {
         presence:  { key: String(currentUserId) },
@@ -207,38 +426,27 @@ export default function ChatRoom() {
 
     presenceChannel.on('presence', { event: 'sync' }, () => {
       const state = presenceChannel.presenceState();
-      const othersOnline = Object.keys(state).some(k => String(k) !== String(currentUserId));
-      setIsOtherUserOnline(othersOnline);
+      setIsOtherUserOnline(Object.keys(state).some(k => String(k) !== String(currentUserId)));
     });
-
-    presenceChannel.on('presence', { event: 'join' }, ({ key }) => {
+    presenceChannel.on('presence', { event: 'join' }, ({ key }: any) => {
       if (String(key) !== String(currentUserId)) setIsOtherUserOnline(true);
     });
-
-    presenceChannel.on('presence', { event: 'leave' }, ({ key }) => {
+    presenceChannel.on('presence', { event: 'leave' }, ({ key }: any) => {
       if (String(key) !== String(currentUserId)) {
-        // Recheck state after a short delay in case of brief reconnects
         setTimeout(() => {
           const state = presenceChannel.presenceState();
-          const othersOnline = Object.keys(state).some(k => String(k) !== String(currentUserId));
-          setIsOtherUserOnline(othersOnline);
+          setIsOtherUserOnline(Object.keys(state).some(k => String(k) !== String(currentUserId)));
         }, 1500);
       }
     });
-
-    presenceChannel.on('broadcast', { event: 'typing' }, (payload) => {
+    presenceChannel.on('broadcast', { event: 'typing' }, (payload: any) => {
       if (String(payload.payload.userId) !== String(currentUserId)) {
         setIsOtherUserTyping(payload.payload.isTyping);
       }
     });
-
-    presenceChannel.subscribe(async (status) => {
+    presenceChannel.subscribe(async (status: string) => {
       if (status === 'SUBSCRIBED') {
-        // Track presence immediately on subscribe
-        await presenceChannel.track({
-          online:  true,
-          user_id: String(currentUserId),
-        });
+        await presenceChannel.track({ online: true, user_id: String(currentUserId) });
       }
     });
 
@@ -246,86 +454,194 @@ export default function ChatRoom() {
       supabase.removeChannel(msgChannel);
       supabase.removeChannel(presenceChannel);
     };
-  }, [chatId, currentUserId]); // currentUserId now arrives fast via initUser
+  }, [chatId, currentUserId]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  FIX 3 — useFocusEffect SAFETY NET
-  //  When the app is backgrounded, the WebSocket may drop. When the user
-  //  comes back, re-fetch messages and re-track presence so nothing is missed.
+  //  FOCUS SAFETY NET
   // ─────────────────────────────────────────────────────────────────────────
   useFocusEffect(
     useCallback(() => {
-      // Refetch messages in case any were missed while screen was unfocused
-      if (chatId && currentUserIdRef.current && !loading) {
-        refetchMessages();
+      const shouldResyncMessages =
+        messages.length === 0 || Date.now() - lastMessagesFetchAtRef.current > 30_000;
+
+      if (chatId && currentUserIdRef.current && !loading && shouldResyncMessages) {
+        void refetchMessagesRef.current();
       }
-      // Re-announce presence in case our tracking dropped
+      if (chatId && chatId !== 'new' && currentUserIdRef.current) {
+        void forceMarkAsReadRef.current(currentUserIdRef.current);
+      }
       if (presenceChannelRef.current && currentUserIdRef.current) {
         presenceChannelRef.current.track({
           online:  true,
           user_id: String(currentUserIdRef.current),
         });
       }
-    }, [chatId, loading])
+    }, [chatId, loading, messages.length])
   );
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  SETUP — fetch chat data and messages
+  //  CHAT OPTIONS MENU
   // ─────────────────────────────────────────────────────────────────────────
-  const setupChat = async () => {
-    setLoading(true);
+  const openChatMenu = () => {
+    if (!dotsRef.current) return;
+    (dotsRef.current as any).measureInWindow((x: number, y: number, w: number, h: number) => {
+      setChatMenuPos({ x: x + w - 200, y: y + h + 6 });
+      setChatMenuVisible(true);
+    });
+  };
 
-    // Get user id (may already be set by initUser, but grab it anyway for
-    // cases where setupChat runs before initUser resolves)
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user && !currentUserIdRef.current) {
-      setCurrentUserId(user.id);
-      currentUserIdRef.current = user.id;
-    }
-    const uid = user?.id ?? currentUserIdRef.current;
+  const closeChatMenu = () => setChatMenuVisible(false);
 
-    const { data: cData } = await supabase
-      .from('chats')
-      .select('*, listings(price, title, image_urls, id)')
-      .eq('id', chatId)
-      .single();
+  const handleViewProfile = () => {
+    closeChatMenu();
+    const otherId = currentUserIdRef.current === chatDetails?.seller_id
+      ? chatDetails?.buyer_id : chatDetails?.seller_id;
+    router.push(`/user/${otherId}` as any);
+  };
 
-    if (cData) {
-      setChatDetails(cData);
-      setIsSeller(uid === cData.seller_id);
+  const handleSearchToggle = () => {
+    closeChatMenu();
+    setSearchText('');
+    setSearchMatchIdx(0);
+    setSearchVisible(v => {
+      if (!v) setTimeout(() => searchInputRef.current?.focus(), 100);
+      return !v;
+    });
+  };
 
-      const otherId = uid === cData.seller_id ? cData.buyer_id : cData.seller_id;
-      const { data: otherProfile } = await supabase
-        .from('profiles').select('*').eq('id', otherId).single();
-      if (otherProfile) setOtherUserProfile(otherProfile);
+  const handleMuteChat = async () => {
+    closeChatMenu();
+    const isMuted = chatDetails?.is_muted;
+    await supabase.from('chats').update({ is_muted: !isMuted }).eq('id', chatId);
+    setChatDetails((prev: any) => ({ ...prev, is_muted: !isMuted }));
+    Alert.alert(
+      isMuted ? 'Unmuted' : 'Muted',
+      isMuted ? 'Notifications turned on.' : 'Notifications silenced for this chat.'
+    );
+  };
 
-      if (cData.is_sold && !cData.review_submitted && cData.buyer_id === uid) {
-        setTimeout(() => setRatingVisible(true), 700);
+  const handleClearChat = () => {
+    closeChatMenu();
+    Alert.alert(
+      'Clear Chat',
+      'All messages will be cleared for you only. The other person will still see them.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear', style: 'destructive', onPress: async () => {
+            const myId = currentUserIdRef.current;
+            if (!myId) return;
+            for (const msg of messages) {
+              const existing = msg.deleted_by || [];
+              if (!existing.includes(myId)) {
+                await supabase.from('messages')
+                  .update({ deleted_by: [...existing, myId] }).eq('id', msg.id);
+              }
+            }
+            setMessages([]);
+            setPinnedMessage(null);
+          },
+        },
+      ]
+    );
+  };
+
+  const handleBlockUser = () => {
+    closeChatMenu();
+    const otherId = currentUserIdRef.current === chatDetails?.seller_id
+      ? chatDetails?.buyer_id : chatDetails?.seller_id;
+    const otherName = otherUserProfile?.display_name || 'this user';
+    Alert.alert(
+      `Block ${otherName}?`,
+      "They won't be able to message you and you won't see their listings.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block', style: 'destructive', onPress: async () => {
+            await supabase.from('blocked_users').upsert(
+              { blocker_id: currentUserIdRef.current, blocked_id: otherId },
+              { onConflict: 'blocker_id,blocked_id', ignoreDuplicates: true }
+            );
+            Alert.alert('Blocked', `${otherName} has been blocked.`);
+            router.back();
+          },
+        },
+      ]
+    );
+  };
+
+  const handleReportFromMenu = () => {
+    closeChatMenu();
+    const otherId = currentUserIdRef.current === chatDetails?.seller_id
+      ? chatDetails?.buyer_id : chatDetails?.seller_id;
+    Alert.alert('Report User', 'Are you sure you want to report this user for suspicious activity?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Report', style: 'destructive', onPress: async () => {
+          const { error } = await supabase.rpc('report_user_engine', {
+            p_reported_user_id: otherId, p_reason: 'Reported from chat',
+          });
+          if (!error) Alert.alert('Report Received', 'Thank you. We will investigate.');
+          else Alert.alert('Already Reported', 'You have already reported this user.');
+        },
+      },
+    ]);
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  IN-CHAT SEARCH
+  // ─────────────────────────────────────────────────────────────────────────
+  const localizedListingTitle = useCallback(
+    (listing: any) => getLocalizedListingField(listing, 'title', lang) || 'Chat',
+    [lang]
+  );
+
+  const localizedMessageText = useCallback(
+    (message: any) => getLocalizedMessageContent(message, lang),
+    [lang]
+  );
+
+  const localizedSystemText = useCallback(
+    (message: any) => {
+      const rawContent = String(message?.content ?? '');
+
+      if (message?.is_deleted_for_everyone || rawContent.startsWith('🚫')) {
+        return `🚫 ${t('chat_message_deleted')}`;
       }
+
+      if (rawContent.startsWith('🎉')) {
+        return `🎉 ${t('chat_item_sold')}`;
+      }
+
+      return localizedMessageText(message);
+    },
+    [localizedMessageText, t]
+  );
+
+  const searchMatches = searchText.trim()
+    ? messages.filter((m) => {
+        const searchableText =
+          m.is_deleted_for_everyone || m.is_system || m.type === 'system'
+            ? localizedSystemText(m)
+            : localizedMessageText(m);
+
+        return searchableText.toLowerCase().includes(searchText.toLowerCase());
+      })
+    : [];
+
+  const jumpToSearchResult = (direction: 'next' | 'prev') => {
+    if (!searchMatches.length) return;
+    const newIdx = direction === 'next'
+      ? (searchMatchIdx + 1) % searchMatches.length
+      : (searchMatchIdx - 1 + searchMatches.length) % searchMatches.length;
+    setSearchMatchIdx(newIdx);
+    const msg = searchMatches[newIdx];
+    const idx = messages.findIndex(m => m.id === msg.id);
+    if (idx !== -1) {
+      flatListRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+      setHighlightedMsgId(msg.id);
+      setTimeout(() => setHighlightedMsgId(null), 1500);
     }
-
-    await refetchMessages(uid ?? undefined);
-    setLoading(false);
-
-    if (uid) await supabase.rpc('mark_chat_read', { p_chat_id: chatId, p_user_id: uid });
-  };
-
-  const refetchMessages = async (uid?: string) => {
-    const myId = uid ?? currentUserIdRef.current;
-    const { data } = await supabase
-      .from('messages').select('*')
-      .eq('chat_id', chatId)
-      .order('created_at', { ascending: false });
-    if (data && myId) {
-      const visible  = data.filter(m => !m.deleted_by?.includes(myId));
-      setMessages(visible);
-      const activePin = visible.find(m => m.is_pinned && new Date(m.pinned_until) > new Date());
-      if (activePin) setPinnedMessage(activePin); else setPinnedMessage(null);
-    }
-  };
-
-  const forceMarkAsRead = async (userId: string | undefined) => {
-    if (userId) await supabase.rpc('mark_chat_read', { p_chat_id: chatId, p_user_id: userId });
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -333,7 +649,7 @@ export default function ChatRoom() {
   // ─────────────────────────────────────────────────────────────────────────
   const pickImage = async () => {
     setIsAttachMenuVisible(false);
-    let result = await ImagePicker.launchImageLibraryAsync({
+    const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, quality: 0.7,
     });
     if (!result.canceled && result.assets[0].uri) uploadImage(result.assets[0].uri);
@@ -342,18 +658,17 @@ export default function ChatRoom() {
   const uploadImage = async (uri: string) => {
     try {
       setUploadingImage(true);
+      const activeChatId = await resolveChatId();
+      if (!activeChatId) return;
       const response = await fetch(uri);
       const blob     = await response.blob();
       const fileExt  = uri.substring(uri.lastIndexOf('.') + 1) || 'jpg';
       const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
-
       const { error } = await supabase.storage.from('chat_images').upload(fileName, blob);
       if (error) throw error;
-
       const { data: { publicUrl } } = supabase.storage.from('chat_images').getPublicUrl(fileName);
-      // Insert only — postgres_changes delivers it to both sides
       await supabase.from('messages').insert({
-        chat_id: chatId, sender_id: currentUserIdRef.current,
+        chat_id: activeChatId, sender_id: currentUserIdRef.current,
         content: '📷 Photo', status: 'sent', type: 'image', image_url: publicUrl,
       });
     } catch (error: any) {
@@ -369,27 +684,25 @@ export default function ChatRoom() {
   const sendRealLocation = async () => {
     setIsAttachMenuVisible(false);
     if (Platform.OS === 'web') return Alert.alert('Mobile Only', 'Location sharing is only available on the mobile app.');
-
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return Alert.alert('Permission Denied', 'Please allow Boltzy to access your location.');
-
     setIsFetchingLocation(true);
     try {
+      const activeChatId = await resolveChatId();
+      if (!activeChatId) return;
       const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
       const { latitude, longitude } = location.coords;
-      const geocode  = await Location.reverseGeocodeAsync({ latitude, longitude });
+      const geocode = await Location.reverseGeocodeAsync({ latitude, longitude });
       const geo: any = geocode.length > 0 ? geocode[0] : {};
       const address  = geo.city
         ? `${geo.district || geo.subregion || ''}, ${geo.city}, ${geo.region}`.replace(/^, /, '')
         : `Lat: ${latitude.toFixed(4)}, Lng: ${longitude.toFixed(4)}`;
       const mapLink  = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
-
       const { error } = await supabase.from('messages').insert({
-        chat_id: chatId, sender_id: currentUserIdRef.current,
-        content: `📍 Live GPS: ${address}\n${mapLink}`,
-        status: 'sent', type: 'location',
+        chat_id: activeChatId, sender_id: currentUserIdRef.current,
+        content: `📍 Live GPS: ${address}\n${mapLink}`, status: 'sent', type: 'location',
       });
-      if (error) Alert.alert('Database Error', 'Failed to send location to database.');
+      if (error) Alert.alert('Database Error', 'Failed to send location.');
     } catch (error: any) {
       Alert.alert('GPS Error', `Could not fetch location: ${error.message}`);
     } finally {
@@ -403,27 +716,21 @@ export default function ChatRoom() {
   const getExactContactName = (contact: any) => {
     if (contact.name && contact.name.trim() !== '') return contact.name.trim();
     const parts = [contact.firstName, contact.middleName, contact.lastName].filter(Boolean);
-    if (parts.length > 0) return parts.join(' ').trim();
-    return 'Unknown Contact';
+    return parts.length > 0 ? parts.join(' ').trim() : 'Unknown Contact';
   };
 
   const openContactPicker = async () => {
     setIsAttachMenuVisible(false);
     setContactSearchQuery('');
     if (Platform.OS === 'web') return Alert.alert('Mobile Only', 'Contact sharing is only available on the mobile app.');
-
     const { status } = await Contacts.requestPermissionsAsync();
     if (status !== 'granted') return Alert.alert('Permission Denied', 'Please allow Boltzy to access your contacts.');
-
     try {
       const { data } = await Contacts.getContactsAsync({
-        fields: [
-          Contacts.Fields.PhoneNumbers, Contacts.Fields.Name,
-          Contacts.Fields.FirstName, Contacts.Fields.MiddleName, Contacts.Fields.LastName,
-        ],
+        fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name, Contacts.Fields.FirstName, Contacts.Fields.MiddleName, Contacts.Fields.LastName],
         sort: Contacts.SortTypes.FirstName,
       });
-      const valid = data.filter(c => c.phoneNumbers && c.phoneNumbers.length > 0);
+      const valid = data.filter((c: any) => c.phoneNumbers && c.phoneNumbers.length > 0);
       if (valid.length > 0) { setPhoneContacts(valid); setIsContactPickerVisible(true); }
       else Alert.alert('Empty Book', 'No contacts found with phone numbers.');
     } catch (error: any) {
@@ -433,17 +740,18 @@ export default function ChatRoom() {
 
   const sendSelectedContact = async (contact: any) => {
     setIsContactPickerVisible(false);
+    const activeChatId = await resolveChatId();
+    if (!activeChatId) return;
     const phone     = contact.phoneNumbers[0].number;
     const exactName = getExactContactName(contact);
     await supabase.from('messages').insert({
-      chat_id: chatId, sender_id: currentUserIdRef.current,
-      content: `👤 ${exactName}\n📞 ${phone}`,
-      status: 'sent', type: 'contact',
+      chat_id: activeChatId, sender_id: currentUserIdRef.current,
+      content: `👤 ${exactName}\n📞 ${phone}`, status: 'sent', type: 'contact',
     });
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  TYPING INDICATOR — broadcast via presenceChannel only
+  //  TYPING
   // ─────────────────────────────────────────────────────────────────────────
   const sendTypingBroadcast = (isTyping: boolean) => {
     presenceChannelRef.current?.send({
@@ -454,10 +762,7 @@ export default function ChatRoom() {
 
   const handleTyping = (text: string) => {
     setNewMessage(text);
-    if (!isTypingRef.current) {
-      isTypingRef.current = true;
-      sendTypingBroadcast(true);
-    }
+    if (!isTypingRef.current) { isTypingRef.current = true; sendTypingBroadcast(true); }
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current as any);
     typingTimeoutRef.current = setTimeout(() => {
       isTypingRef.current = false;
@@ -467,15 +772,13 @@ export default function ChatRoom() {
 
   // ─────────────────────────────────────────────────────────────────────────
   //  SEND / EDIT MESSAGE
-  //  Inserts only — postgres_changes delivers to both parties reliably.
-  //  No broadcastNewMessage needed anymore.
   // ─────────────────────────────────────────────────────────────────────────
   const sendMessage = async () => {
     if (!newMessage.trim() || !currentUserIdRef.current) return;
+    const activeChatId = await resolveChatId();
+    if (!activeChatId) return;
     const messageText = newMessage.trim();
     setNewMessage('');
-
-    // Stop typing indicator
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current as any);
     isTypingRef.current = false;
     sendTypingBroadcast(false);
@@ -488,12 +791,10 @@ export default function ChatRoom() {
       setEditingMsgId(null);
       return;
     }
-
     await supabase.from('messages').insert({
-      chat_id: chatId, sender_id: currentUserIdRef.current,
+      chat_id: activeChatId, sender_id: currentUserIdRef.current,
       content: messageText, status: 'sent', type: 'text',
     });
-    // postgres_changes INSERT event fires on both web and mobile reliably
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -504,13 +805,12 @@ export default function ChatRoom() {
     const amount       = parseFloat(offerAmount);
     const listingPrice = chatDetails?.listings?.price || 0;
     const minPrice     = listingPrice * 0.5;
-
     if (isNaN(amount))         return setOfferError('Please enter a valid amount.');
     if (amount < minPrice)     return setOfferError(`Offer must be at least 50% of asking price (₹${minPrice.toFixed(0)}).`);
     if (amount > listingPrice) return setOfferError(`You cannot offer more than the asking price (₹${listingPrice}).`);
-
+    const activeChatId = await resolveChatId();
+    if (!activeChatId) return;
     setOfferModalVisible(false);
-
     if (editingMsgId) {
       const { data } = await supabase.from('messages').update({
         offer_amount: amount,
@@ -521,14 +821,12 @@ export default function ChatRoom() {
       setEditingMsgId(null);
     } else {
       await supabase.from('messages').insert({
-        chat_id: chatId, sender_id: currentUserIdRef.current,
+        chat_id: activeChatId, sender_id: currentUserIdRef.current,
         content: offerNote.trim() || "I'd like to make an offer for this item.",
-        status: 'sent', type: 'offer',
-        offer_amount: amount, offer_status: 'pending',
+        status: 'sent', type: 'offer', offer_amount: amount, offer_status: 'pending',
       });
     }
-    setOfferAmount('');
-    setOfferNote('');
+    setOfferAmount(''); setOfferNote('');
   };
 
   const handleOfferAction = async (msgId: string, action: 'accepted' | 'declined') => {
@@ -563,30 +861,30 @@ export default function ChatRoom() {
   };
 
   const handleUnpin = (pinnedId: string) => {
-    Alert.alert('Unpin Message', 'Are you sure you want to unpin this message?', [
+    Alert.alert('Unpin Message', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Unpin', style: 'destructive', onPress: async () => {
+      {
+        text: 'Unpin', style: 'destructive', onPress: async () => {
           const { data } = await supabase.from('messages')
-            .update({ is_pinned: false, pinned_until: null }).eq('id', pinnedId).select().single();
+            .update({ is_pinned: false, pinned_until: null })
+            .eq('id', pinnedId).select().single();
           if (data) {
             setMessages(prev => prev.map(m => String(m.id) === String(data.id) ? data : m));
             setPinnedMessage(null);
           }
-        }
+        },
       },
     ]);
   };
 
   const handleLongPress = (msg: any) => { setSelectedMsg(msg); setModalVisible(true); };
-
-  const isWithin10Mins = (timestamp: string) =>
+  const isWithin10Mins  = (timestamp: string) =>
     (new Date().getTime() - new Date(timestamp).getTime()) < 600000;
 
   const handleDeleteForEveryone = async () => {
     setModalVisible(false);
     const { data } = await supabase.from('messages').update({
-      is_deleted_for_everyone: true,
-      content: '🚫 This message was deleted.',
+      is_deleted_for_everyone: true, content: '🚫 This message was deleted.',
     }).eq('id', selectedMsg.id).select().single();
     if (data) setMessages(prev => prev.map(m => String(m.id) === String(data.id) ? data : m));
   };
@@ -605,7 +903,7 @@ export default function ChatRoom() {
 
   const handlePinRequest = () => {
     setModalVisible(false);
-    Alert.alert('Pin Message', 'How long do you want to pin this message?', [
+    Alert.alert('Pin Message', 'How long?', [
       { text: '1 Week',  onPress: () => applyPin(7)  },
       { text: '1 Month', onPress: () => applyPin(30) },
       { text: 'Cancel',  style: 'cancel'             },
@@ -613,13 +911,14 @@ export default function ChatRoom() {
   };
 
   const applyPin = async (days: number) => {
-    const expirationDate = new Date();
-    expirationDate.setDate(expirationDate.getDate() + days);
+    const exp = new Date();
+    exp.setDate(exp.getDate() + days);
     if (pinnedMessage) {
-      await supabase.from('messages').update({ is_pinned: false, pinned_until: null }).eq('id', pinnedMessage.id);
+      await supabase.from('messages')
+        .update({ is_pinned: false, pinned_until: null }).eq('id', pinnedMessage.id);
     }
     const { data } = await supabase.from('messages').update({
-      is_pinned: true, pinned_until: expirationDate.toISOString(),
+      is_pinned: true, pinned_until: exp.toISOString(),
     }).eq('id', selectedMsg.id).select().single();
     if (data) {
       setMessages(prev => prev.map(m => String(m.id) === String(data.id) ? data : m));
@@ -636,26 +935,7 @@ export default function ChatRoom() {
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  //  REPORT USER
-  // ─────────────────────────────────────────────────────────────────────────
-  const reportUser = () => {
-    const otherUserId = currentUserIdRef.current === chatDetails?.seller_id
-      ? chatDetails?.buyer_id : chatDetails?.seller_id;
-    Alert.alert('Report User', 'Are you sure you want to report this user for suspicious activity?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Report', style: 'destructive', onPress: async () => {
-          const { error } = await supabase.rpc('report_user_engine', {
-            p_reported_user_id: otherUserId, p_reason: 'Reported from chat',
-          });
-          if (!error) Alert.alert('Report Received', 'Thank you. We will investigate.');
-          else Alert.alert('Already Reported', 'You have already reported this user.');
-        }
-      },
-    ]);
-  };
-
-  // ─────────────────────────────────────────────────────────────────────────
-  //  TRUST ENGINE: MARK SOLD + REVIEW
+  //  TRUST ENGINE
   // ─────────────────────────────────────────────────────────────────────────
   const confirmMarkSold = async () => {
     setMarkSoldVisible(false);
@@ -673,12 +953,9 @@ export default function ChatRoom() {
     if (ratingValue === 0) { Alert.alert('Rate your experience', 'Please tap the stars to leave a rating.'); return; }
     setSubmittingReview(true);
     const { error } = await supabase.from('reviews').insert({
-      reviewer_id: currentUserIdRef.current,
-      seller_id:   chatDetails.seller_id,
-      chat_id:     chatId,
-      listing_id:  chatDetails.listing_id,
-      rating:      ratingValue,
-      review_text: reviewText.trim() || null,
+      reviewer_id: currentUserIdRef.current, seller_id: chatDetails.seller_id,
+      chat_id:     chatId, listing_id: chatDetails.listing_id,
+      rating:      ratingValue, review_text: reviewText.trim() || null,
     });
     if (!error) {
       await supabase.from('chats').update({ review_submitted: true }).eq('id', chatId);
@@ -713,20 +990,21 @@ export default function ChatRoom() {
     const isDeleted     = item.is_deleted_for_everyone;
     const myReaction    = item.reactions ? Object.values(item.reactions)[0] as string : null;
     const isHighlighted = item.id === highlightedMsgId;
-
     const isOffer    = item.type === 'offer';
     const isImage    = item.type === 'image';
     const isLocation = item.type === 'location';
     const isContact  = item.type === 'contact';
     const isSystem   = item.type === 'system' || item.is_system;
     const isSpecial  = isOffer || isImage || isLocation || isContact;
+    const messageText = isDeleted || isSystem ? localizedSystemText(item) : localizedMessageText(item);
+    const isSearchHit = searchText.trim() && messageText.toLowerCase().includes(searchText.toLowerCase());
 
     if (isSystem) {
       return (
         <View style={styles.systemMsgWrap}>
           <View style={styles.systemMsgBubble}>
             <Ionicons name="checkmark-circle" size={14} color="#2E7D32" style={{ marginRight: 6 }} />
-            <Text style={styles.systemMsgText}>{item.content}</Text>
+            <Text style={styles.systemMsgText}>{localizedSystemText(item)}</Text>
           </View>
         </View>
       );
@@ -761,6 +1039,7 @@ export default function ChatRoom() {
           isMine ? styles.myBubble : styles.theirBubble,
           isDeleted && styles.deletedBubble,
           isHighlighted && styles.highlightedBubble,
+          isSearchHit && styles.searchHitBubble,
           isOffer && styles.offerBubble,
           isImage && styles.imageBubble,
         ]}>
@@ -773,42 +1052,34 @@ export default function ChatRoom() {
               <Text style={styles.offerHeaderText}>Offer Made</Text>
             </View>
           )}
-          {isOffer && !isDeleted && (
-            <Text style={styles.offerAmountText}>₹{item.offer_amount}</Text>
-          )}
+          {isOffer && !isDeleted && <Text style={styles.offerAmountText}>₹{item.offer_amount}</Text>}
           {isLocation && !isDeleted && (
-            <TouchableOpacity
-              style={styles.attachmentBox}
-              onPress={() => {
-                const urlMatch = item.content.match(/https:\/\/www\.google\.com\/maps[^\s]+/);
-                if (urlMatch) Linking.openURL(urlMatch[0]);
-              }}
-            >
+            <TouchableOpacity style={styles.attachmentBox} onPress={() => {
+              const urlMatch = item.content.match(/https:\/\/www\.google\.com\/maps[^\s]+/);
+              if (urlMatch) Linking.openURL(urlMatch[0]);
+            }}>
               <View style={[styles.attachmentIconWrap, { backgroundColor: '#e8f5e9' }]}>
                 <Ionicons name="map" size={24} color="#4CAF50" />
               </View>
               <View style={{ flexShrink: 1 }}>
                 <Text style={[styles.msgText, isMine ? styles.myText : styles.theirText, { fontWeight: 'bold' }]} numberOfLines={1}>
-                  {item.content.split('\n')[0]}
+                  {messageText.split('\n')[0]}
                 </Text>
                 <Text style={{ color: '#007AFF', fontSize: 12, marginTop: 2 }}>Tap to view on map</Text>
               </View>
             </TouchableOpacity>
           )}
           {isContact && !isDeleted && (
-            <TouchableOpacity
-              style={styles.attachmentBox}
-              onPress={() => {
-                const phoneMatch = item.content.match(/📞\s*([+0-9\s]+)/);
-                if (phoneMatch) Linking.openURL(`tel:${phoneMatch[1].trim()}`);
-              }}
-            >
+            <TouchableOpacity style={styles.attachmentBox} onPress={() => {
+              const phoneMatch = item.content.match(/📞\s*([+0-9\s]+)/);
+              if (phoneMatch) Linking.openURL(`tel:${phoneMatch[1].trim()}`);
+            }}>
               <View style={[styles.attachmentIconWrap, { backgroundColor: '#e3f2fd' }]}>
                 <Ionicons name="person" size={24} color="#2196F3" />
               </View>
               <View style={{ flexShrink: 1 }}>
                 <Text style={[styles.msgText, isMine ? styles.myText : styles.theirText, { fontWeight: 'bold' }]} numberOfLines={1}>
-                  {item.content.split('\n')[0]}
+                  {messageText.split('\n')[0]}
                 </Text>
                 <Text style={{ color: '#007AFF', fontSize: 12, marginTop: 2 }}>Tap to call</Text>
               </View>
@@ -821,7 +1092,7 @@ export default function ChatRoom() {
               isDeleted && styles.deletedText,
               isOffer && { fontStyle: 'italic' },
             ]}>
-              {isOffer && !isDeleted ? `"${item.content}"` : item.content}
+              {isOffer && !isDeleted ? `"${messageText}"` : messageText}
             </Text>
           )}
           {isOffer && !isDeleted && item.offer_status === 'pending' && !isMine && currentUserIdRef.current === chatDetails?.seller_id && (
@@ -904,7 +1175,7 @@ export default function ChatRoom() {
             {isOtherUserOnline && <View style={styles.headerOnlineDot} />}
           </View>
           <View>
-            <Text style={styles.headerTitle} numberOfLines={1}>{chatDetails?.listings?.title || 'Chat'}</Text>
+            <Text style={styles.headerTitle} numberOfLines={1}>{localizedListingTitle(chatDetails?.listings)}</Text>
             {isOtherUserTyping ? (
               <Animated.Text style={[styles.typingText, { opacity: fadeAnim }]}>typing...</Animated.Text>
             ) : isOtherUserOnline ? (
@@ -919,9 +1190,11 @@ export default function ChatRoom() {
               <Text style={styles.markSoldBtnText}>Mark Sold</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity onPress={reportUser} style={{ paddingLeft: 4 }}>
-            <Ionicons name="ellipsis-vertical" size={24} color="#000" />
-          </TouchableOpacity>
+          <View ref={dotsRef} collapsable={false}>
+            <TouchableOpacity onPress={openChatMenu} style={{ padding: 6 }}>
+              <Ionicons name="ellipsis-vertical" size={24} color="#000" />
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -939,7 +1212,7 @@ export default function ChatRoom() {
               </View>
           }
           <View style={{ flex: 1 }}>
-            <Text style={styles.stripTitle} numberOfLines={1}>{chatDetails.listings.title}</Text>
+            <Text style={styles.stripTitle} numberOfLines={1}>{localizedListingTitle(chatDetails.listings)}</Text>
             <Text style={styles.stripPrice}>₹{Number(chatDetails.listings.price).toLocaleString('en-IN')}</Text>
           </View>
           {chatDetails?.is_sold && (
@@ -949,13 +1222,41 @@ export default function ChatRoom() {
         </TouchableOpacity>
       )}
 
+      {/* ═══ IN-CHAT SEARCH BAR ════════════════════════════ */}
+      {searchVisible && (
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={18} color="#999" style={{ marginRight: 8 }} />
+          <TextInput
+            ref={searchInputRef}
+            style={styles.searchInput}
+            placeholder="Search messages..."
+            value={searchText}
+            onChangeText={t => { setSearchText(t); setSearchMatchIdx(0); }}
+            placeholderTextColor="#bbb"
+            returnKeyType="search"
+          />
+          {searchMatches.length > 0 && (
+            <Text style={styles.searchCount}>{searchMatchIdx + 1}/{searchMatches.length}</Text>
+          )}
+          <TouchableOpacity onPress={() => jumpToSearchResult('prev')} disabled={!searchMatches.length} style={styles.searchNavBtn}>
+            <Ionicons name="chevron-up" size={20} color={searchMatches.length ? '#007AFF' : '#ccc'} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => jumpToSearchResult('next')} disabled={!searchMatches.length} style={styles.searchNavBtn}>
+            <Ionicons name="chevron-down" size={20} color={searchMatches.length ? '#007AFF' : '#ccc'} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { setSearchVisible(false); setSearchText(''); }} style={styles.searchNavBtn}>
+            <Ionicons name="close" size={20} color="#666" />
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* ═══ PINNED MESSAGE BAR ════════════════════════════ */}
       {pinnedMessage && (
         <TouchableOpacity style={styles.pinnedBar} onPress={jumpToPinnedMessage} activeOpacity={0.7}>
           <Ionicons name="pin" size={16} color="#007AFF" />
           <View style={{ flex: 1 }}>
             <Text style={styles.pinnedTitle}>Pinned Message</Text>
-            <Text style={styles.pinnedText} numberOfLines={1}>{pinnedMessage.content}</Text>
+            <Text style={styles.pinnedText} numberOfLines={1}>{localizedMessageText(pinnedMessage)}</Text>
           </View>
           <TouchableOpacity onPress={() => handleUnpin(pinnedMessage.id)} style={{ padding: 5 }}>
             <Ionicons name="close" size={20} color="#999" />
@@ -1034,7 +1335,7 @@ export default function ChatRoom() {
         </TouchableOpacity>
       </View>
 
-      {/* ════════════════ MODAL: CONTACT PICKER ════════════ */}
+      {/* ════════════ MODAL: CONTACT PICKER ════════════════ */}
       <Modal visible={isContactPickerVisible} transparent animationType="slide">
         <View style={styles.contactModalOverlay}>
           <View style={styles.contactModalCard}>
@@ -1077,7 +1378,7 @@ export default function ChatRoom() {
         </View>
       </Modal>
 
-      {/* ════════════════ MODAL: ATTACHMENT MENU ═══════════ */}
+      {/* ════════════ MODAL: ATTACHMENT MENU ═══════════════ */}
       <Modal visible={isAttachMenuVisible} transparent animationType="fade">
         <TouchableOpacity style={styles.attachOverlay} activeOpacity={1} onPress={() => setIsAttachMenuVisible(false)}>
           <View style={styles.attachMenuCard}>
@@ -1105,7 +1406,7 @@ export default function ChatRoom() {
         </TouchableOpacity>
       </Modal>
 
-      {/* ════════════════ MODAL: SEND / EDIT OFFER ═════════ */}
+      {/* ════════════ MODAL: SEND / EDIT OFFER ═════════════ */}
       <Modal visible={offerModalVisible} transparent animationType="slide">
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -1139,7 +1440,7 @@ export default function ChatRoom() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* ════════════════ MODAL: MESSAGE OPTIONS ═══════════ */}
+      {/* ════════════ MODAL: MESSAGE OPTIONS ════════════════ */}
       <Modal visible={isModalVisible} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} onPress={() => setModalVisible(false)}>
           <View style={styles.modalContent}>
@@ -1164,9 +1465,7 @@ export default function ChatRoom() {
                 {selectedMsg?.type !== 'image' && selectedMsg?.type !== 'location' && selectedMsg?.type !== 'contact' && (
                   <TouchableOpacity style={styles.modalOption} onPress={handleEdit}>
                     <Ionicons name="pencil" size={22} color="#000" />
-                    <Text style={styles.modalOptionText}>
-                      Edit {selectedMsg.type === 'offer' ? 'Offer' : 'Message'}
-                    </Text>
+                    <Text style={styles.modalOptionText}>Edit {selectedMsg.type === 'offer' ? 'Offer' : 'Message'}</Text>
                   </TouchableOpacity>
                 )}
                 <TouchableOpacity style={styles.modalOption} onPress={handleDeleteForEveryone}>
@@ -1179,7 +1478,7 @@ export default function ChatRoom() {
         </TouchableOpacity>
       </Modal>
 
-      {/* ════════════════ MODAL: MARK AS SOLD ══════════════ */}
+      {/* ════════════ MODAL: MARK AS SOLD ═══════════════════ */}
       <Modal visible={markSoldVisible} transparent animationType="fade">
         <View style={styles.overlayCenter}>
           <View style={styles.confirmCard}>
@@ -1188,8 +1487,7 @@ export default function ChatRoom() {
             </View>
             <Text style={styles.confirmTitle}>Mark Item as Sold?</Text>
             <Text style={styles.confirmSubtitle}>
-              This will mark "{chatDetails?.listings?.title}" as sold.{'\n'}
-              The buyer will be prompted to leave you a review to build your reputation.
+              {`This will mark "${chatDetails?.listings?.title ?? 'this item'}" as sold.\nThe buyer will be prompted to leave you a review.`}
             </Text>
             <TouchableOpacity style={styles.confirmYesBtn} onPress={confirmMarkSold}>
               <Text style={styles.confirmYesText}>Yes, Mark as Sold</Text>
@@ -1201,7 +1499,7 @@ export default function ChatRoom() {
         </View>
       </Modal>
 
-      {/* ════════════════ MODAL: RATE & REVIEW ═════════════ */}
+      {/* ════════════ MODAL: RATE & REVIEW ══════════════════ */}
       <Modal visible={ratingVisible} transparent animationType="slide">
         <View style={styles.overlayBottom}>
           <View style={styles.ratingCard}>
@@ -1244,144 +1542,220 @@ export default function ChatRoom() {
         </View>
       </Modal>
 
+      {/* ════════════ MODAL: CHAT OPTIONS MENU ══════════════ */}
+      <Modal visible={chatMenuVisible} transparent animationType="fade" onRequestClose={closeChatMenu} statusBarTranslucent>
+        <TouchableWithoutFeedback onPress={closeChatMenu}>
+          <View style={styles.chatMenuOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={[styles.chatMenuCard, { top: chatMenuPos.y, left: chatMenuPos.x }]}>
+
+                <TouchableOpacity style={styles.chatMenuItem} onPress={handleViewProfile} activeOpacity={0.7}>
+                  <View style={[styles.chatMenuIcon, { backgroundColor: '#EFF6FF' }]}>
+                    <Ionicons name="person-outline" size={17} color="#007AFF" />
+                  </View>
+                  <Text style={styles.chatMenuText}>View Profile</Text>
+                </TouchableOpacity>
+
+                <View style={styles.chatMenuDivider} />
+
+                <TouchableOpacity style={styles.chatMenuItem} onPress={handleSearchToggle} activeOpacity={0.7}>
+                  <View style={[styles.chatMenuIcon, { backgroundColor: '#F0FDF4' }]}>
+                    <Ionicons name="search-outline" size={17} color="#16A34A" />
+                  </View>
+                  <Text style={styles.chatMenuText}>Search Messages</Text>
+                </TouchableOpacity>
+
+                <View style={styles.chatMenuDivider} />
+
+                <TouchableOpacity style={styles.chatMenuItem} onPress={handleMuteChat} activeOpacity={0.7}>
+                  <View style={[styles.chatMenuIcon, { backgroundColor: '#FFF7ED' }]}>
+                    <Ionicons name={chatDetails?.is_muted ? 'notifications-outline' : 'notifications-off-outline'} size={17} color="#EA580C" />
+                  </View>
+                  <Text style={styles.chatMenuText}>
+                    {chatDetails?.is_muted ? 'Unmute Chat' : 'Mute Chat'}
+                  </Text>
+                </TouchableOpacity>
+
+                <View style={styles.chatMenuDivider} />
+
+                <TouchableOpacity style={styles.chatMenuItem} onPress={handleClearChat} activeOpacity={0.7}>
+                  <View style={[styles.chatMenuIcon, { backgroundColor: '#F5F5F5' }]}>
+                    <Ionicons name="trash-outline" size={17} color="#666" />
+                  </View>
+                  <Text style={styles.chatMenuText}>Clear Chat</Text>
+                </TouchableOpacity>
+
+                <View style={styles.chatMenuDivider} />
+
+                <TouchableOpacity style={styles.chatMenuItem} onPress={handleBlockUser} activeOpacity={0.7}>
+                  <View style={[styles.chatMenuIcon, { backgroundColor: '#FFF1F0' }]}>
+                    <Ionicons name="ban-outline" size={17} color="#FF3B30" />
+                  </View>
+                  <Text style={[styles.chatMenuText, { color: '#FF3B30' }]}>Block User</Text>
+                </TouchableOpacity>
+
+                <View style={styles.chatMenuDivider} />
+
+                <TouchableOpacity style={styles.chatMenuItem} onPress={handleReportFromMenu} activeOpacity={0.7}>
+                  <View style={[styles.chatMenuIcon, { backgroundColor: '#FFF1F0' }]}>
+                    <Ionicons name="flag-outline" size={17} color="#FF3B30" />
+                  </View>
+                  <Text style={[styles.chatMenuText, { color: '#FF3B30' }]}>Report User</Text>
+                </TouchableOpacity>
+
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
     </KeyboardAvoidingView>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  STYLES  (identical to your original — nothing changed here)
-// ─────────────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container:           { flex: 1, backgroundColor: '#ece5dd' },
-  loadingOverlay:      { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 999, justifyContent: 'center', alignItems: 'center' },
-  header:              { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 20, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee', zIndex: 10 },
-  headerBack:          { paddingRight: 10 },
-  headerTitleContainer:{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerAvatarWrap:    { position: 'relative', width: 38, height: 38 },
-  headerAvatarImg:     { width: 38, height: 38, borderRadius: 19 },
-  headerAvatarFallback:{ width: 38, height: 38, borderRadius: 19, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center' },
-  headerAvatarLetter:  { color: '#fff', fontSize: 15, fontWeight: 'bold' },
-  headerOnlineDot:     { position: 'absolute', bottom: 0, right: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: '#4CAF50', borderWidth: 1.5, borderColor: '#fff' },
-  headerTitle:         { fontSize: 16, fontWeight: 'bold', color: '#000' },
-  onlineText:          { fontSize: 12, color: '#007AFF', fontWeight: '500', marginTop: 2 },
-  typingText:          { fontSize: 12, color: '#34C759', fontWeight: 'bold', fontStyle: 'italic', marginTop: 2 },
-  markSoldBtn:         { backgroundColor: '#000', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10 },
-  markSoldBtnText:     { color: '#fff', fontSize: 12, fontWeight: '700' },
-  listingStrip:        { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#fff', paddingHorizontal: 14, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  listingStripSold:    { backgroundColor: '#fafafa' },
-  stripImg:            { width: 40, height: 40, borderRadius: 8 },
-  stripTitle:          { fontSize: 13, fontWeight: '600', color: '#222' },
-  stripPrice:          { fontSize: 12, color: '#007AFF', fontWeight: '700', marginTop: 1 },
-  stripSoldBadge:      { backgroundColor: '#FF3B30', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
-  stripSoldText:       { color: '#fff', fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
-  pinnedBar:           { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 12, borderBottomWidth: 1, borderBottomColor: '#eee', gap: 12, borderLeftWidth: 4, borderLeftColor: '#007AFF', ...Platform.select({ web: { boxShadow: '0px 2px 4px rgba(0,0,0,0.1)' }, default: { elevation: 2 } }) },
-  pinnedTitle:         { fontSize: 12, color: '#007AFF', fontWeight: 'bold', marginBottom: 2 },
-  pinnedText:          { fontSize: 14, color: '#333' },
-  listContent:         { padding: 16 },
-  systemMsgWrap:       { alignItems: 'center', marginVertical: 8 },
-  systemMsgBubble:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#e8f5e9', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 8, borderWidth: 1, borderColor: '#c8e6c9' },
-  systemMsgText:       { fontSize: 13, color: '#2E7D32', fontWeight: '600' },
-  msgWrapper:          { marginBottom: 12, flexDirection: 'row', width: '100%', alignItems: 'flex-end' },
-  myMsgWrapper:        { justifyContent: 'flex-end' },
-  theirMsgWrapper:     { justifyContent: 'flex-start' },
-  msgAvatarWrap:       { width: 32, height: 32, marginRight: 6, marginBottom: 4 },
-  msgAvatarImg:        { width: 32, height: 32, borderRadius: 16 },
-  msgAvatarFallback:   { width: 32, height: 32, borderRadius: 16, backgroundColor: '#bbb', justifyContent: 'center', alignItems: 'center' },
-  msgAvatarLetter:     { fontSize: 13, fontWeight: 'bold', color: '#fff' },
-  msgBubble:           { maxWidth: '80%', padding: 10, borderRadius: 12, position: 'relative' },
-  myBubble:            { backgroundColor: '#dcf8c6', borderBottomRightRadius: 0 },
-  theirBubble:         { backgroundColor: '#fff', borderBottomLeftRadius: 0 },
-  deletedBubble:       { backgroundColor: '#f0f0f0', fontStyle: 'italic' },
-  highlightedBubble:   { backgroundColor: '#FFD700' },
-  attachmentBox:       { flexDirection: 'row', alignItems: 'center', marginVertical: 4, paddingRight: 10 },
-  attachmentIconWrap:  { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  imageBubble:         { padding: 4, width: 250 },
-  chatImage:           { width: '100%', height: 250, borderRadius: 8, backgroundColor: '#e0e0e0' },
-  imageFooterOverlay:  { position: 'absolute', bottom: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.4)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10 },
-  textShadow:          { color: '#fff', fontWeight: 'bold' },
-  offerBubble:         { borderWidth: 2, borderColor: '#007AFF', borderStyle: 'dashed', backgroundColor: '#e6f2ff', padding: 16, width: '70%' },
-  offerHeader:         { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  offerHeaderText:     { color: '#007AFF', fontWeight: 'bold', fontSize: 14 },
-  offerAmountText:     { fontSize: 24, fontWeight: 'bold', color: '#000', marginBottom: 4 },
-  offerActionRow:      { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, gap: 10 },
-  acceptBtn:           { flex: 1, backgroundColor: '#34C759', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
-  declineBtn:          { flex: 1, backgroundColor: '#FF3B30', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
-  offerStatusBadge:    { marginTop: 10, paddingVertical: 6, borderRadius: 8, alignItems: 'center' },
-  bgGreen:             { backgroundColor: '#34C759' },
-  bgRed:               { backgroundColor: '#FF3B30' },
-  msgText:             { fontSize: 16, marginBottom: 4 },
-  myText:              { color: '#000' },
-  theirText:           { color: '#000' },
-  deletedText:         { color: '#888', fontStyle: 'italic' },
-  msgFooter:           { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 4, marginTop: 2 },
-  timeText:            { fontSize: 10, color: '#888' },
-  editedText:          { fontSize: 10, color: '#888', fontStyle: 'italic', marginRight: 4 },
-  reactionBadge:       { position: 'absolute', bottom: -10, right: 10, backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: '#eee', ...Platform.select({ web: { boxShadow: '0px 2px 4px rgba(0,0,0,0.1)' }, default: { elevation: 2 } }) },
-  soldBanner:          { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f1f8f2', paddingHorizontal: 16, paddingVertical: 9, borderTopWidth: 1, borderTopColor: '#c8e6c9' },
-  soldBannerText:      { fontSize: 13, color: '#388E3C', fontWeight: '500' },
-  soldBannerLink:      { color: '#007AFF', fontWeight: '700' },
-  inputBar:            { flexDirection: 'row', padding: 10, alignItems: 'center', backgroundColor: '#f0f0f0', paddingBottom: Platform.OS === 'ios' ? 30 : 10 },
-  attachMenuBtn:       { marginRight: 8, padding: 4 },
-  offerIconBtn:        { marginRight: 8, padding: 4 },
-  input:               { flex: 1, backgroundColor: '#fff', borderRadius: 24, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10, fontSize: 16, maxHeight: 100, marginRight: 8 },
-  inlineCameraBtn:     { position: 'absolute', right: 65, padding: 8, top: 12 },
-  sendBtn:             { backgroundColor: '#007AFF', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
-  sendBtnDisabled:     { backgroundColor: '#999' },
-  attachOverlay:       { flex: 1, justifyContent: 'flex-end', backgroundColor: 'transparent' },
-  attachMenuCard:      { backgroundColor: '#fff', margin: 16, marginBottom: 80, borderRadius: 16, padding: 20, ...Platform.select({ web: { boxShadow: '0px 4px 12px rgba(0,0,0,0.15)' }, default: { elevation: 5 } }) },
-  attachRow:           { flexDirection: 'row', justifyContent: 'space-around' },
-  attachItem:          { alignItems: 'center', width: 80 },
-  attachIconCircle:    { width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
-  attachText:          { fontSize: 14, color: '#333' },
-  contactModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  contactModalCard:    { backgroundColor: '#fff', height: '60%', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
-  contactHeader:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-  contactTitle:        { fontSize: 20, fontWeight: 'bold' },
-  contactSearchBox:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f0f0f0', borderRadius: 10, paddingHorizontal: 12, height: 40, marginBottom: 15 },
-  contactSearchInput:  { flex: 1, fontSize: 15, color: '#000' },
-  contactRow:          { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
-  contactAvatar:       { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e0e0e0', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
-  contactAvatarText:   { fontSize: 18, fontWeight: 'bold', color: '#666' },
-  contactName:         { fontSize: 16, fontWeight: '600', color: '#333' },
-  contactPhone:        { fontSize: 14, color: '#888', marginTop: 2 },
-  modalOverlay:        { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalContent:        { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
-  modalTitle:          { fontSize: 20, fontWeight: 'bold', marginBottom: 4 },
-  modalSub:            { fontSize: 14, color: '#666', marginBottom: 20 },
-  errorText:           { color: '#FF3B30', marginBottom: 10, fontWeight: 'bold' },
-  offerInput:          { backgroundColor: '#f9f9f9', borderWidth: 1, borderColor: '#eee', borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 16 },
-  cancelBtn:           { flex: 1, backgroundColor: '#eee', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
-  sendOfferBtn:        { flex: 1, backgroundColor: '#000', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
-  btnTextBlack:        { color: '#000', fontSize: 16, fontWeight: 'bold' },
-  btnTextWhite:        { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  reactionRow:         { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 15 },
-  reactionEmoji:       { fontSize: 32 },
-  divider:             { height: 1, backgroundColor: '#eee', marginBottom: 10 },
-  modalOption:         { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, gap: 12 },
-  modalOptionText:     { fontSize: 16, fontWeight: '500', color: '#000' },
-  overlayCenter:       { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  confirmCard:         { backgroundColor: '#fff', borderRadius: 24, padding: 28, alignItems: 'center', width: '100%', ...Platform.select({ web: { boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }, default: { elevation: 10 } }) },
-  confirmIconWrap:     { width: 80, height: 80, borderRadius: 40, backgroundColor: '#f1f8f2', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
-  confirmTitle:        { fontSize: 20, fontWeight: 'bold', color: '#000', marginBottom: 10, textAlign: 'center' },
-  confirmSubtitle:     { fontSize: 14, color: '#777', textAlign: 'center', lineHeight: 21, marginBottom: 24 },
-  confirmYesBtn:       { width: '100%', backgroundColor: '#000', paddingVertical: 15, borderRadius: 14, alignItems: 'center', marginBottom: 10 },
-  confirmYesText:      { color: '#fff', fontSize: 16, fontWeight: '700' },
-  confirmCancelBtn:    { width: '100%', paddingVertical: 13, borderRadius: 14, alignItems: 'center', backgroundColor: '#f5f5f5' },
-  confirmCancelText:   { color: '#666', fontSize: 15, fontWeight: '600' },
-  overlayBottom:       { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
-  ratingCard:          { backgroundColor: '#fff', borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 28, paddingBottom: Platform.OS === 'ios' ? 44 : 28, alignItems: 'center' },
-  ratingHandle:        { width: 40, height: 4, borderRadius: 2, backgroundColor: '#e0e0e0', marginBottom: 20 },
-  ratingAvatarWrap:    { marginBottom: 16 },
-  ratingAvatarImg:     { width: 76, height: 76, borderRadius: 38, borderWidth: 3, borderColor: '#f0f0f0' },
-  ratingAvatarFallback:{ width: 76, height: 76, borderRadius: 38, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#f0f0f0' },
-  ratingAvatarLetter:  { color: '#fff', fontSize: 30, fontWeight: 'bold' },
-  ratingTitle:         { fontSize: 22, fontWeight: 'bold', color: '#000', marginBottom: 8 },
-  ratingSubtitle:      { fontSize: 15, color: '#777', textAlign: 'center', marginBottom: 16, lineHeight: 22 },
-  ratingLabel:         { fontSize: 15, fontWeight: '600', color: '#F5A623', marginTop: 4, marginBottom: 12 },
-  reviewInput:         { width: '100%', backgroundColor: '#f8f8f8', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 12, fontSize: 15, color: '#333', borderWidth: 1, borderColor: '#ebebeb', textAlignVertical: 'top', marginTop: 8, minHeight: 88 },
-  reviewCharCount:     { alignSelf: 'flex-end', fontSize: 11, color: '#ccc', marginTop: 4, marginBottom: 16 },
-  submitReviewBtn:     { width: '100%', backgroundColor: '#000', paddingVertical: 15, borderRadius: 14, alignItems: 'center', marginBottom: 10 },
-  submitReviewText:    { color: '#fff', fontSize: 16, fontWeight: '700' },
-  skipBtn:             { paddingVertical: 10 },
-  skipText:            { fontSize: 14, color: '#aaa', fontWeight: '500' },
+  container:            { flex: 1, backgroundColor: '#ece5dd' },
+  loadingOverlay:       { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 999, justifyContent: 'center', alignItems: 'center' },
+  header:               { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 20, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee', zIndex: 10 },
+  headerBack:           { paddingRight: 10 },
+  headerTitleContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerAvatarWrap:     { position: 'relative', width: 38, height: 38 },
+  headerAvatarImg:      { width: 38, height: 38, borderRadius: 19 },
+  headerAvatarFallback: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center' },
+  headerAvatarLetter:   { color: '#fff', fontSize: 15, fontWeight: 'bold' },
+  headerOnlineDot:      { position: 'absolute', bottom: 0, right: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: '#4CAF50', borderWidth: 1.5, borderColor: '#fff' },
+  headerTitle:          { fontSize: 16, fontWeight: 'bold', color: '#000' },
+  onlineText:           { fontSize: 12, color: '#007AFF', fontWeight: '500', marginTop: 2 },
+  typingText:           { fontSize: 12, color: '#34C759', fontWeight: 'bold', fontStyle: 'italic', marginTop: 2 },
+  markSoldBtn:          { backgroundColor: '#000', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10 },
+  markSoldBtnText:      { color: '#fff', fontSize: 12, fontWeight: '700' },
+  listingStrip:         { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#fff', paddingHorizontal: 14, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  listingStripSold:     { backgroundColor: '#fafafa' },
+  stripImg:             { width: 40, height: 40, borderRadius: 8 },
+  stripTitle:           { fontSize: 13, fontWeight: '600', color: '#222' },
+  stripPrice:           { fontSize: 12, color: '#007AFF', fontWeight: '700', marginTop: 1 },
+  stripSoldBadge:       { backgroundColor: '#FF3B30', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  stripSoldText:        { color: '#fff', fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  searchBar:            { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  searchInput:          { flex: 1, fontSize: 15, color: '#000' },
+  searchCount:          { fontSize: 12, color: '#aaa', marginHorizontal: 8, fontWeight: '600' },
+  searchNavBtn:         { padding: 4 },
+  pinnedBar:            { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 12, borderBottomWidth: 1, borderBottomColor: '#eee', gap: 12, borderLeftWidth: 4, borderLeftColor: '#007AFF', ...Platform.select({ web: { boxShadow: '0px 2px 4px rgba(0,0,0,0.1)' }, default: { elevation: 2 } }) },
+  pinnedTitle:          { fontSize: 12, color: '#007AFF', fontWeight: 'bold', marginBottom: 2 },
+  pinnedText:           { fontSize: 14, color: '#333' },
+  listContent:          { padding: 16 },
+  systemMsgWrap:        { alignItems: 'center', marginVertical: 8 },
+  systemMsgBubble:      { flexDirection: 'row', alignItems: 'center', backgroundColor: '#e8f5e9', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 8, borderWidth: 1, borderColor: '#c8e6c9' },
+  systemMsgText:        { fontSize: 13, color: '#2E7D32', fontWeight: '600' },
+  msgWrapper:           { marginBottom: 12, flexDirection: 'row', width: '100%', alignItems: 'flex-end' },
+  myMsgWrapper:         { justifyContent: 'flex-end' },
+  theirMsgWrapper:      { justifyContent: 'flex-start' },
+  msgAvatarWrap:        { width: 32, height: 32, marginRight: 6, marginBottom: 4 },
+  msgAvatarImg:         { width: 32, height: 32, borderRadius: 16 },
+  msgAvatarFallback:    { width: 32, height: 32, borderRadius: 16, backgroundColor: '#bbb', justifyContent: 'center', alignItems: 'center' },
+  msgAvatarLetter:      { fontSize: 13, fontWeight: 'bold', color: '#fff' },
+  msgBubble:            { maxWidth: '80%', padding: 10, borderRadius: 12, position: 'relative' },
+  myBubble:             { backgroundColor: '#dcf8c6', borderBottomRightRadius: 0 },
+  theirBubble:          { backgroundColor: '#fff', borderBottomLeftRadius: 0 },
+  deletedBubble:        { backgroundColor: '#f0f0f0', fontStyle: 'italic' },
+  highlightedBubble:    { backgroundColor: '#FFD700' },
+  searchHitBubble:      { borderWidth: 2, borderColor: '#007AFF' },
+  attachmentBox:        { flexDirection: 'row', alignItems: 'center', marginVertical: 4, paddingRight: 10 },
+  attachmentIconWrap:   { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+  imageBubble:          { padding: 4, width: 250 },
+  chatImage:            { width: '100%', height: 250, borderRadius: 8, backgroundColor: '#e0e0e0' },
+  imageFooterOverlay:   { position: 'absolute', bottom: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.4)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10 },
+  textShadow:           { color: '#fff', fontWeight: 'bold' },
+  offerBubble:          { borderWidth: 2, borderColor: '#007AFF', borderStyle: 'dashed', backgroundColor: '#e6f2ff', padding: 16, width: '70%' },
+  offerHeader:          { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  offerHeaderText:      { color: '#007AFF', fontWeight: 'bold', fontSize: 14 },
+  offerAmountText:      { fontSize: 24, fontWeight: 'bold', color: '#000', marginBottom: 4 },
+  offerActionRow:       { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, gap: 10 },
+  acceptBtn:            { flex: 1, backgroundColor: '#34C759', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
+  declineBtn:           { flex: 1, backgroundColor: '#FF3B30', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
+  offerStatusBadge:     { marginTop: 10, paddingVertical: 6, borderRadius: 8, alignItems: 'center' },
+  bgGreen:              { backgroundColor: '#34C759' },
+  bgRed:                { backgroundColor: '#FF3B30' },
+  msgText:              { fontSize: 16, marginBottom: 4 },
+  myText:               { color: '#000' },
+  theirText:            { color: '#000' },
+  deletedText:          { color: '#888', fontStyle: 'italic' },
+  msgFooter:            { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 4, marginTop: 2 },
+  timeText:             { fontSize: 10, color: '#888' },
+  editedText:           { fontSize: 10, color: '#888', fontStyle: 'italic', marginRight: 4 },
+  reactionBadge:        { position: 'absolute', bottom: -10, right: 10, backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: '#eee', ...Platform.select({ web: { boxShadow: '0px 2px 4px rgba(0,0,0,0.1)' }, default: { elevation: 2 } }) },
+  soldBanner:           { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f1f8f2', paddingHorizontal: 16, paddingVertical: 9, borderTopWidth: 1, borderTopColor: '#c8e6c9' },
+  soldBannerText:       { fontSize: 13, color: '#388E3C', fontWeight: '500' },
+  soldBannerLink:       { color: '#007AFF', fontWeight: '700' },
+  inputBar:             { flexDirection: 'row', padding: 10, alignItems: 'center', backgroundColor: '#f0f0f0', paddingBottom: Platform.OS === 'ios' ? 30 : 10 },
+  attachMenuBtn:        { marginRight: 8, padding: 4 },
+  offerIconBtn:         { marginRight: 8, padding: 4 },
+  input:                { flex: 1, backgroundColor: '#fff', borderRadius: 24, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10, fontSize: 16, maxHeight: 100, marginRight: 8 },
+  inlineCameraBtn:      { position: 'absolute', right: 65, padding: 8, top: 12 },
+  sendBtn:              { backgroundColor: '#007AFF', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  sendBtnDisabled:      { backgroundColor: '#999' },
+  attachOverlay:        { flex: 1, justifyContent: 'flex-end', backgroundColor: 'transparent' },
+  attachMenuCard:       { backgroundColor: '#fff', margin: 16, marginBottom: 80, borderRadius: 16, padding: 20, ...Platform.select({ web: { boxShadow: '0px 4px 12px rgba(0,0,0,0.15)' }, default: { elevation: 5 } }) },
+  attachRow:            { flexDirection: 'row', justifyContent: 'space-around' },
+  attachItem:           { alignItems: 'center', width: 80 },
+  attachIconCircle:     { width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+  attachText:           { fontSize: 14, color: '#333' },
+  contactModalOverlay:  { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  contactModalCard:     { backgroundColor: '#fff', height: '60%', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20 },
+  contactHeader:        { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+  contactTitle:         { fontSize: 20, fontWeight: 'bold' },
+  contactSearchBox:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f0f0f0', borderRadius: 10, paddingHorizontal: 12, height: 40, marginBottom: 15 },
+  contactSearchInput:   { flex: 1, fontSize: 15, color: '#000' },
+  contactRow:           { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  contactAvatar:        { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e0e0e0', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  contactAvatarText:    { fontSize: 18, fontWeight: 'bold', color: '#666' },
+  contactName:          { fontSize: 16, fontWeight: '600', color: '#333' },
+  contactPhone:         { fontSize: 14, color: '#888', marginTop: 2 },
+  modalOverlay:         { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalContent:         { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
+  modalTitle:           { fontSize: 20, fontWeight: 'bold', marginBottom: 4 },
+  modalSub:             { fontSize: 14, color: '#666', marginBottom: 20 },
+  errorText:            { color: '#FF3B30', marginBottom: 10, fontWeight: 'bold' },
+  offerInput:           { backgroundColor: '#f9f9f9', borderWidth: 1, borderColor: '#eee', borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 16 },
+  cancelBtn:            { flex: 1, backgroundColor: '#eee', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  sendOfferBtn:         { flex: 1, backgroundColor: '#000', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  btnTextBlack:         { color: '#000', fontSize: 16, fontWeight: 'bold' },
+  btnTextWhite:         { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  reactionRow:          { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 15 },
+  reactionEmoji:        { fontSize: 32 },
+  divider:              { height: 1, backgroundColor: '#eee', marginBottom: 10 },
+  modalOption:          { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, gap: 12 },
+  modalOptionText:      { fontSize: 16, fontWeight: '500', color: '#000' },
+  overlayCenter:        { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  confirmCard:          { backgroundColor: '#fff', borderRadius: 24, padding: 28, alignItems: 'center', width: '100%', ...Platform.select({ web: { boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }, default: { elevation: 10 } }) },
+  confirmIconWrap:      { width: 80, height: 80, borderRadius: 40, backgroundColor: '#f1f8f2', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
+  confirmTitle:         { fontSize: 20, fontWeight: 'bold', color: '#000', marginBottom: 10, textAlign: 'center' },
+  confirmSubtitle:      { fontSize: 14, color: '#777', textAlign: 'center', lineHeight: 21, marginBottom: 24 },
+  confirmYesBtn:        { width: '100%', backgroundColor: '#000', paddingVertical: 15, borderRadius: 14, alignItems: 'center', marginBottom: 10 },
+  confirmYesText:       { color: '#fff', fontSize: 16, fontWeight: '700' },
+  confirmCancelBtn:     { width: '100%', paddingVertical: 13, borderRadius: 14, alignItems: 'center', backgroundColor: '#f5f5f5' },
+  confirmCancelText:    { color: '#666', fontSize: 15, fontWeight: '600' },
+  overlayBottom:        { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  ratingCard:           { backgroundColor: '#fff', borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 28, paddingBottom: Platform.OS === 'ios' ? 44 : 28, alignItems: 'center' },
+  ratingHandle:         { width: 40, height: 4, borderRadius: 2, backgroundColor: '#e0e0e0', marginBottom: 20 },
+  ratingAvatarWrap:     { marginBottom: 16 },
+  ratingAvatarImg:      { width: 76, height: 76, borderRadius: 38, borderWidth: 3, borderColor: '#f0f0f0' },
+  ratingAvatarFallback: { width: 76, height: 76, borderRadius: 38, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#f0f0f0' },
+  ratingAvatarLetter:   { color: '#fff', fontSize: 30, fontWeight: 'bold' },
+  ratingTitle:          { fontSize: 22, fontWeight: 'bold', color: '#000', marginBottom: 8 },
+  ratingSubtitle:       { fontSize: 15, color: '#777', textAlign: 'center', marginBottom: 16, lineHeight: 22 },
+  ratingLabel:          { fontSize: 15, fontWeight: '600', color: '#F5A623', marginTop: 4, marginBottom: 12 },
+  reviewInput:          { width: '100%', backgroundColor: '#f8f8f8', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 12, fontSize: 15, color: '#333', borderWidth: 1, borderColor: '#ebebeb', textAlignVertical: 'top', marginTop: 8, minHeight: 88 },
+  reviewCharCount:      { alignSelf: 'flex-end', fontSize: 11, color: '#ccc', marginTop: 4, marginBottom: 16 },
+  submitReviewBtn:      { width: '100%', backgroundColor: '#000', paddingVertical: 15, borderRadius: 14, alignItems: 'center', marginBottom: 10 },
+  submitReviewText:     { color: '#fff', fontSize: 16, fontWeight: '700' },
+  skipBtn:              { paddingVertical: 10 },
+  skipText:             { fontSize: 14, color: '#aaa', fontWeight: '500' },
+  chatMenuOverlay:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.06)' },
+  chatMenuCard:         { position: 'absolute', backgroundColor: '#fff', borderRadius: 16, paddingVertical: 4, width: 210, ...Platform.select({ web: { boxShadow: '0 8px 32px rgba(0,0,0,0.16)' }, default: { elevation: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.18, shadowRadius: 20 } }) },
+  chatMenuItem:         { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 13 },
+  chatMenuIcon:         { width: 34, height: 34, borderRadius: 9, justifyContent: 'center', alignItems: 'center' },
+  chatMenuText:         { fontSize: 15, fontWeight: '500', color: '#222' },
+  chatMenuDivider:      { height: 1, backgroundColor: '#f2f2f2', marginHorizontal: 14 },
 });

@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View, Image, Alert } from 'react-native';
 import { supabase } from '../supabase';
+import { getCurrentUser } from '../utils/auth';
 
 export default function SavedItems() {
   const router = useRouter();
@@ -15,7 +16,7 @@ export default function SavedItems() {
 
   const fetchSavedListings = async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getCurrentUser();
     if (!user) return;
 
     const { data, error } = await supabase
@@ -34,7 +35,7 @@ export default function SavedItems() {
   };
 
   const removeFromSaved = async (listingId: string) => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getCurrentUser();
     if (!user) return;
 
     // Optimistic Update: Remove from UI immediately

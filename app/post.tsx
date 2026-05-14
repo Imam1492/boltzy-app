@@ -7,25 +7,32 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { supabase } from '../supabase';
+import { getCurrentUser } from '../utils/auth';
+import { useLanguage } from '../context/LanguageContext';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
+
+function categoryI18nKey(cat: string): string {
+  return `cat_${cat.replace(/\s+/g, '_')}`;
+}
 
 const ALL_CATEGORIES = [
   'Mobiles','Vehicles','Properties','Electronics','Furniture',
   'Fashion','Bikes','Jobs','Books','Sports','Pets','Other',
 ];
 
-// Suggested highlight starters to help sellers write good chips
-const HIGHLIGHT_SUGGESTIONS: Record<string, string[]> = {
-  Mobiles:     ['128GB Storage', 'Single Owner', 'Box Included', 'Warranty Active', 'No Scratches', 'Face ID'],
-  Vehicles:    ['1st Owner', 'Insurance Valid', 'Fuel Full', 'AC Working', 'Service Updated', 'No Accidents'],
-  Electronics: ['Working Perfectly', 'Original Charger', 'Screen Guard', 'Bill Available', 'Warranty Left', '6 Months Old'],
-  Furniture:   ['Solid Wood', 'No Damage', 'Self-Pickup Only', 'Dismantled Easily', 'Water Resistant', 'Branded'],
-  default:     ['Good Condition', 'Original Product', 'Negotiable', 'Bill Available', 'Warranty Left', 'Brand New'],
+/** i18n keys for quick-add highlight chips (per category). */
+const HIGHLIGHT_SUGGESTION_KEYS: Record<string, string[]> = {
+  Mobiles: ['post_sug_mobiles_0', 'post_sug_mobiles_1', 'post_sug_mobiles_2', 'post_sug_mobiles_3', 'post_sug_mobiles_4', 'post_sug_mobiles_5'],
+  Vehicles: ['post_sug_vehicles_0', 'post_sug_vehicles_1', 'post_sug_vehicles_2', 'post_sug_vehicles_3', 'post_sug_vehicles_4', 'post_sug_vehicles_5'],
+  Electronics: ['post_sug_electronics_0', 'post_sug_electronics_1', 'post_sug_electronics_2', 'post_sug_electronics_3', 'post_sug_electronics_4', 'post_sug_electronics_5'],
+  Furniture: ['post_sug_furniture_0', 'post_sug_furniture_1', 'post_sug_furniture_2', 'post_sug_furniture_3', 'post_sug_furniture_4', 'post_sug_furniture_5'],
+  default: ['post_sug_default_0', 'post_sug_default_1', 'post_sug_default_2', 'post_sug_default_3', 'post_sug_default_4', 'post_sug_default_5'],
 };
 
 export default function PostAd() {
   const router = useRouter();
+  const { t } = useLanguage();
 
   const [title, setTitle]           = useState('');
   const [price, setPrice]           = useState('');
@@ -55,7 +62,7 @@ export default function PostAd() {
     cat.toLowerCase().includes(categorySearch.toLowerCase())
   );
 
-  const suggestions = HIGHLIGHT_SUGGESTIONS[category] || HIGHLIGHT_SUGGESTIONS.default;
+  const suggestionKeys = HIGHLIGHT_SUGGESTION_KEYS[category] || HIGHLIGHT_SUGGESTION_KEYS.default;
 
   // ─────────────────────────────────────────────────────────────────────────
   //  HIGHLIGHTS HELPERS
@@ -64,7 +71,7 @@ export default function PostAd() {
     const trimmed = text.trim();
     if (!trimmed) return;
     if (highlights.length >= 8) {
-      Alert.alert('Max 8 Highlights', 'Remove one before adding another.');
+      Alert.alert(t('post_alert_max_highlights_title'), t('post_alert_max_highlights_msg'));
       return;
     }
     if (highlights.includes(trimmed)) return;
@@ -105,7 +112,7 @@ export default function PostAd() {
   // ─────────────────────────────────────────────────────────────────────────
   const fetchExactLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return Alert.alert('Permission Denied', 'Please allow Boltzy to access your location.');
+    if (status !== 'granted') return Alert.alert(t('post_permission_denied_title'), t('post_permission_denied_msg'));
 
     setIsFetchingLocation(true);
     try {
@@ -120,7 +127,7 @@ export default function PostAd() {
         setLocationText(addr);
       }
     } catch {
-      Alert.alert('GPS Error', 'Could not fetch your location. Please type it manually.');
+      Alert.alert(t('post_gps_error_title'), t('post_gps_error_msg'));
     } finally {
       setIsFetchingLocation(false);
     }
@@ -131,13 +138,13 @@ export default function PostAd() {
   // ─────────────────────────────────────────────────────────────────────────
   const handlePostAd = async () => {
     if (!title || !price || !category || !locationText) {
-      return Alert.alert('Missing Fields', 'Please fill in the title, price, category, and location.');
+      return Alert.alert(t('post_missing_fields_title'), t('post_missing_fields_msg'));
     }
 
     setIsUploading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('You must be logged in to post an ad.');
+      const user = await getCurrentUser();
+      if (!user) throw new Error(t('post_login_required'));
 
       // Upload images
       const uploadedUrls: string[] = [];
@@ -167,11 +174,11 @@ export default function PostAd() {
 
       if (error) throw error;
 
-      Alert.alert('🎉 Ad Posted!', 'Your ad has been posted successfully.', [
-        { text: 'OK', onPress: () => router.replace('/home') },
+      Alert.alert(t('post_success_title'), t('post_success_msg'), [
+        { text: t('post_ok'), onPress: () => router.replace('/home') },
       ]);
     } catch (error: any) {
-      Alert.alert('Error', error.message);
+      Alert.alert(t('common_error'), error.message);
     } finally {
       setIsUploading(false);
     }
@@ -189,26 +196,26 @@ export default function PostAd() {
         <TouchableOpacity onPress={() => router.back()} style={{ padding: 8 }}>
           <Ionicons name="close" size={28} color="#000" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Post an Ad</Text>
+        <Text style={styles.headerTitle}>{t('post_title')}</Text>
         <View style={{ width: 44 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
         {/* ── PHOTOS ──────────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>Add Photos</Text>
-        <Text style={styles.sectionHint}>First photo will be the cover · Max 5 photos</Text>
+        <Text style={styles.sectionTitle}>{t('post_add_photos')}</Text>
+        <Text style={styles.sectionHint}>{t('post_photos_hint')}</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imageScroll}>
           {images.length < 5 && (
             <TouchableOpacity style={styles.addImageBtn} onPress={pickImage}>
               <Ionicons name="camera" size={32} color="#666" />
-              <Text style={styles.addImageText}>Add Photo</Text>
+              <Text style={styles.addImageText}>{t('post_add_photo_btn')}</Text>
             </TouchableOpacity>
           )}
           {images.map((uri, index) => (
             <View key={index} style={styles.imagePreviewContainer}>
               {index === 0 && (
-                <View style={styles.coverBadge}><Text style={styles.coverBadgeText}>Cover</Text></View>
+                <View style={styles.coverBadge}><Text style={styles.coverBadgeText}>{t('post_cover')}</Text></View>
               )}
               <Image source={{ uri }} style={styles.imagePreview} />
               <TouchableOpacity style={styles.removeImageBtn} onPress={() => removeImage(index)}>
@@ -219,39 +226,39 @@ export default function PostAd() {
         </ScrollView>
 
         {/* ── AD DETAILS ──────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>Ad Details</Text>
+        <Text style={styles.sectionTitle}>{t('post_ad_details')}</Text>
 
-        <Text style={styles.label}>Title <Text style={styles.required}>*</Text></Text>
+        <Text style={styles.label}>{t('post_label_title')} <Text style={styles.required}>*</Text></Text>
         <TextInput
           style={styles.input}
-          placeholder="e.g. iPhone 13 Pro Max - Mint Condition"
+          placeholder={t('post_placeholder_title')}
           value={title}
           onChangeText={setTitle}
           maxLength={70}
         />
         <Text style={styles.charCount}>{title.length}/70</Text>
 
-        <Text style={styles.label}>Price (₹) <Text style={styles.required}>*</Text></Text>
+        <Text style={styles.label}>{t('post_label_price')} <Text style={styles.required}>*</Text></Text>
         <View style={styles.priceRow}>
           <Text style={styles.currencySymbol}>₹</Text>
           <TextInput
             style={[styles.input, { flex: 1, marginBottom: 0 }]}
-            placeholder="e.g. 45000"
+            placeholder={t('post_placeholder_price')}
             value={price}
             onChangeText={setPrice}
             keyboardType="numeric"
           />
         </View>
 
-        <Text style={styles.label}>Category <Text style={styles.required}>*</Text></Text>
+        <Text style={styles.label}>{t('post_label_category')} <Text style={styles.required}>*</Text></Text>
         <TouchableOpacity style={styles.categorySelector} onPress={() => setCategoryModalVisible(true)}>
           <Text style={{ color: category ? '#000' : '#999', fontSize: 16 }}>
-            {category || 'Select a Category'}
+            {category ? t(categoryI18nKey(category)) : t('post_select_category')}
           </Text>
           <Ionicons name="chevron-forward" size={20} color="#666" />
         </TouchableOpacity>
 
-        <Text style={styles.label}>Condition</Text>
+        <Text style={styles.label}>{t('post_label_condition')}</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             {CONDITIONS.map(c => (
@@ -260,18 +267,20 @@ export default function PostAd() {
                 style={[styles.condChip, condition === c && styles.condChipActive]}
                 onPress={() => setCondition(condition === c ? '' : c)}
               >
-                <Text style={[styles.condChipText, condition === c && styles.condChipTextActive]}>{c}</Text>
+                <Text style={[styles.condChipText, condition === c && styles.condChipTextActive]}>{t(c)}</Text>
               </TouchableOpacity>
             ))}
           </View>
         </ScrollView>
 
         {/* ── LOCATION ────────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>Location <Text style={styles.required}>*</Text></Text>
+        <Text style={styles.sectionTitle}>
+          {t('post_location_title')}<Text style={styles.required}>*</Text>
+        </Text>
         <View style={styles.locationContainer}>
           <TextInput
             style={[styles.input, { flex: 1, marginBottom: 0 }]}
-            placeholder="Type area, city, or state..."
+            placeholder={t('post_placeholder_location')}
             value={locationText}
             onChangeText={setLocationText}
           />
@@ -282,17 +291,17 @@ export default function PostAd() {
             }
           </TouchableOpacity>
         </View>
-        <Text style={styles.hintText}>Type manually or tap the GPS icon to pin your exact location.</Text>
+        <Text style={styles.hintText}>{t('post_location_hint')}</Text>
 
         {/* ── KEY HIGHLIGHTS (NEW) ────────────────────────── */}
         <View style={styles.highlightsSection}>
           <View style={styles.highlightsHeader}>
             <Ionicons name="flash" size={18} color="#F5A623" />
-            <Text style={styles.sectionTitle}>Key Highlights</Text>
-            <Text style={styles.highlightCount}>{highlights.length}/8</Text>
+            <Text style={styles.sectionTitle}>{t('post_highlights_title')}</Text>
+            <Text style={styles.highlightCount}>{t('post_highlights_count', { count: highlights.length })}</Text>
           </View>
           <Text style={styles.sectionHint}>
-            Short one-liners that buyers see at a glance — e.g. "128GB Storage", "Single Owner"
+            {t('post_highlights_hint')}
           </Text>
 
           {/* Added chips */}
@@ -314,7 +323,7 @@ export default function PostAd() {
             <View style={styles.highlightInputRow}>
               <TextInput
                 style={styles.highlightInput}
-                placeholder="Type a highlight and press +"
+                placeholder={t('post_highlights_placeholder')}
                 value={highlightInput}
                 onChangeText={setHighlightInput}
                 onSubmitEditing={() => addHighlight(highlightInput)}
@@ -334,9 +343,10 @@ export default function PostAd() {
           {/* Suggestions */}
           {highlights.length < 8 && (
             <View>
-              <Text style={styles.suggestLabel}>Quick add:</Text>
+              <Text style={styles.suggestLabel}>{t('post_highlights_quick_add')}</Text>
               <View style={styles.chipsWrap}>
-                {suggestions
+                {suggestionKeys
+                  .map(k => t(k))
                   .filter(s => !highlights.includes(s))
                   .map((sug, i) => (
                     <TouchableOpacity key={i} style={styles.suggestionChip} onPress={() => addSuggestion(sug)}>
@@ -351,10 +361,10 @@ export default function PostAd() {
         </View>
 
         {/* ── DESCRIPTION ─────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>Description (Optional)</Text>
+        <Text style={styles.sectionTitle}>{t('post_desc_title')}</Text>
         <TextInput
           style={[styles.input, { height: 110, textAlignVertical: 'top' }]}
-          placeholder="Describe what you are selling in detail..."
+          placeholder={t('post_desc_placeholder')}
           value={description}
           onChangeText={setDescription}
           multiline
@@ -373,7 +383,7 @@ export default function PostAd() {
             : (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <Ionicons name="checkmark-circle" size={22} color="#fff" />
-                <Text style={styles.submitBtnText}>Post Now</Text>
+                <Text style={styles.submitBtnText}>{t('post_submit')}</Text>
               </View>
             )
           }
@@ -386,7 +396,7 @@ export default function PostAd() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Category</Text>
+              <Text style={styles.modalTitle}>{t('post_modal_category')}</Text>
               <TouchableOpacity onPress={() => setCategoryModalVisible(false)}>
                 <Ionicons name="close" size={28} color="#000" />
               </TouchableOpacity>
@@ -395,7 +405,7 @@ export default function PostAd() {
               <Ionicons name="search" size={20} color="#999" style={{ marginRight: 10 }} />
               <TextInput
                 style={styles.searchInput}
-                placeholder="Search categories..."
+                placeholder={t('post_search_categories')}
                 value={categorySearch}
                 onChangeText={setCategorySearch}
                 autoFocus
@@ -410,14 +420,14 @@ export default function PostAd() {
                   style={styles.categoryRow}
                   onPress={() => { setCategory(item); setCategoryModalVisible(false); setCategorySearch(''); }}
                 >
-                  <Text style={styles.categoryRowText}>{item}</Text>
+                  <Text style={styles.categoryRowText}>{t(categoryI18nKey(item))}</Text>
                   {category === item
                     ? <Ionicons name="checkmark-circle" size={22} color="#007AFF" />
                     : <Ionicons name="chevron-forward" size={20} color="#ccc" />
                   }
                 </TouchableOpacity>
               )}
-              ListEmptyComponent={<Text style={styles.emptyText}>No categories found.</Text>}
+              ListEmptyComponent={<Text style={styles.emptyText}>{t('post_no_categories')}</Text>}
             />
           </View>
         </View>

@@ -3,9 +3,12 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { supabase } from '../supabase';
+import { getCurrentUser } from '../utils/auth';
+import { useLanguage } from '../context/LanguageContext';
 
 export default function MyAds() {
   const router = useRouter();
+  const { t } = useLanguage();
   const [myListings, setMyListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -15,7 +18,7 @@ export default function MyAds() {
 
   const fetchMyListings = async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getCurrentUser();
     if (!user) return;
 
     const { data, error } = await supabase
@@ -39,19 +42,19 @@ export default function MyAds() {
         item.id === id ? { ...item, is_sold: !currentStatus } : item
       ));
     } else {
-      Alert.alert("Error", "Could not update status.");
+      Alert.alert(t('common_error'), t('my_ads_err_update'));
     }
   };
 
   const deleteAd = (id: string) => {
-    Alert.alert("Delete Ad", "This action cannot be undone. Are you sure?", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: async () => {
+    Alert.alert(t('my_ads_delete_title'), t('my_ads_delete_msg'), [
+      { text: t('Cancel'), style: "cancel" },
+      { text: t('my_ads_delete'), style: "destructive", onPress: async () => {
           const { error } = await supabase.from('listings').delete().eq('id', id);
           if (!error) {
             setMyListings(prev => prev.filter(item => item.id !== id));
           } else {
-            Alert.alert("Error", "Could not delete ad.");
+            Alert.alert(t('common_error'), t('my_ads_err_delete'));
           }
       }}
     ]);
@@ -86,7 +89,7 @@ export default function MyAds() {
                     styles.statusText, 
                     { color: item.is_sold ? '#FF3B30' : '#2E7D32' }
                   ]}>
-                    {item.is_sold ? 'SOLD' : 'ACTIVE'}
+                    {item.is_sold ? t('my_ads_status_sold') : t('my_ads_status_active')}
                   </Text>
                </View>
                <Text style={styles.viewCount}>
@@ -103,7 +106,7 @@ export default function MyAds() {
             onPress={() => toggleSoldStatus(item.id, item.is_sold)}
           >
             <Ionicons name={item.is_sold ? "refresh-outline" : "checkmark-done-outline"} size={18} color="#000" />
-            <Text style={styles.actionBtnText}>{item.is_sold ? 'Relist' : 'Sold'}</Text>
+            <Text style={styles.actionBtnText}>{item.is_sold ? t('my_ads_relist') : t('my_ads_mark_sold')}</Text>
           </TouchableOpacity>
 
           {/* 2. NEW EDIT BUTTON */}
@@ -112,7 +115,7 @@ export default function MyAds() {
             onPress={() => router.push(`/edit-post?id=${item.id}` as any)}
           >
             <Ionicons name="create-outline" size={18} color="#007AFF" />
-            <Text style={[styles.actionBtnText, { color: '#007AFF' }]}>Edit</Text>
+            <Text style={[styles.actionBtnText, { color: '#007AFF' }]}>{t('my_ads_edit')}</Text>
           </TouchableOpacity>
 
           {/* 3. Remove Button */}
@@ -121,7 +124,7 @@ export default function MyAds() {
             onPress={() => deleteAd(item.id)}
           >
             <Ionicons name="trash-outline" size={18} color="#FF3B30" />
-            <Text style={[styles.actionBtnText, { color: '#FF3B30' }]}>Delete</Text>
+            <Text style={[styles.actionBtnText, { color: '#FF3B30' }]}>{t('my_ads_delete')}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -134,7 +137,7 @@ export default function MyAds() {
         <TouchableOpacity onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={28} color="#000" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Seller Dashboard</Text>
+        <Text style={styles.headerTitle}>{t('my_ads_title')}</Text>
         <View style={{ width: 28 }} />
       </View>
 
@@ -145,9 +148,9 @@ export default function MyAds() {
       ) : myListings.length === 0 ? (
         <View style={styles.emptyState}>
           <Ionicons name="megaphone-outline" size={80} color="#ccc" />
-          <Text style={styles.emptyText}>You haven't posted anything yet.</Text>
+          <Text style={styles.emptyText}>{t('my_ads_empty')}</Text>
           <TouchableOpacity style={styles.postBtn} onPress={() => router.push('/post')}>
-            <Text style={styles.postBtnText}>Post Your First Ad</Text>
+            <Text style={styles.postBtnText}>{t('my_ads_post_first')}</Text>
           </TouchableOpacity>
         </View>
       ) : (

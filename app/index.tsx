@@ -1,7 +1,37 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
-import { supabase } from '../supabase'; 
+import { supabase } from '../supabase';
 import { useRouter } from 'expo-router';
+
+/** Supabase phone OTP expects E.164 (+country, no leading 0). */
+function normalizePhoneE164(raw: string): { e164: string | null; reason: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { e164: null, reason: 'empty' };
+
+  if (trimmed.startsWith('+')) {
+    const digits = trimmed.slice(1).replace(/\D/g, '');
+    if (digits.length < 10 || digits.length > 15) return { e164: null, reason: 'bad_length' };
+    if (!/^[1-9]\d+$/.test(digits)) return { e164: null, reason: 'invalid' };
+    return { e164: `+${digits}`, reason: 'ok' };
+  }
+
+  const d = trimmed.replace(/\D/g, '');
+  if (!d) return { e164: null, reason: 'empty' };
+
+  if (d.length === 11 && d.startsWith('0') && /^[6-9]\d{9}$/.test(d.slice(1))) {
+    return { e164: `+91${d.slice(1)}`, reason: 'ok_in91' };
+  }
+
+  if (d.length === 10 && /^[6-9]\d{9}$/.test(d)) {
+    return { e164: `+91${d}`, reason: 'ok_in91' };
+  }
+
+  if (d.length >= 11 && d.length <= 15 && /^[1-9]/.test(d)) {
+    return { e164: `+${d}`, reason: 'ok_intl' };
+  }
+
+  return { e164: null, reason: 'need_country_or_valid_mobile' };
+}
 
 export default function LoginScreen() {
   const [phone, setPhone] = useState('919999999999'); // Default for testing
@@ -19,23 +49,36 @@ export default function LoginScreen() {
       }
     };
     checkUser();
-  }, []);
+  }, [router]);
 
   // --- STEP 1: REQUEST OTP ---
   const requestOtp = async () => {
-    if (phone.length < 10) {
-      Alert.alert("Invalid Number", "Please enter a valid phone number with country code.");
+    const { e164 } = normalizePhoneE164(phone);
+
+    if (!e164) {
+      Alert.alert(
+        'Invalid Number',
+        'Use a 10-digit Indian mobile, or full international format with country code (e.g. +919876543210).',
+      );
       return;
     }
 
     setLoading(true);
-    const { error } = await supabase.auth.signInWithOtp({ phone: phone });
-    setLoading(false);
-    
-    if (error) {
-      Alert.alert("Error", error.message);
-    } else {
-      setStep(2);
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        phone: e164,
+        options: { channel: 'sms' },
+      });
+      if (error) {
+        Alert.alert("Error", error.message);
+      } else {
+        setStep(2);
+      }
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      Alert.alert("Error", err.message || "Could not send OTP. Check your connection and try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -46,58 +89,68 @@ export default function LoginScreen() {
       return;
     }
 
-    setLoading(true);
-    const { data, error } = await supabase.auth.verifyOtp({ 
-      phone: phone, 
-      token: otp, 
-      type: 'sms' 
-    });
-    
-    if (error) {
-      setLoading(false);
-      Alert.alert("Verification Failed", error.message);
+    const { e164 } = normalizePhoneE164(phone);
+    if (!e164) {
+      Alert.alert('Invalid Number', 'Go back and enter a valid phone number.');
       return;
     }
 
-    if (data?.user) {
-      // 1. Check Profile for Deletion OR Ban Status
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('deleted_at, is_banned, banned_until')
-        .eq('id', data.user.id)
-        .single();
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({
+        phone: e164,
+        token: otp,
+        type: 'sms',
+      });
 
-      // 2. CHECK FOR BAN
-      if (profile?.is_banned) {
-        const banDate = new Date(profile.banned_until);
-        if (banDate > new Date()) {
-          setLoading(false);
-          await supabase.auth.signOut(); // Kick them out instantly
-          Alert.alert(
-            "Account Suspended", 
-            `Your account has been suspended due to multiple community reports. Suspension ends: ${banDate.toLocaleDateString()}`,
-            [{ text: "OK" }]
-          );
-          return; // Stop the login process
-        } else {
-          // If the 30 days are over, unban them automatically
-          await supabase.from('profiles').update({ is_banned: false, report_count: 0 }).eq('id', data.user.id);
+      if (error) {
+        Alert.alert("Verification Failed", error.message);
+        return;
+      }
+
+      if (data?.user) {
+        // 1. Check Profile for Deletion OR Ban Status
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('deleted_at, is_banned, banned_until')
+          .eq('id', data.user.id)
+          .single();
+
+        // 2. CHECK FOR BAN
+        if (profile?.is_banned) {
+          const banDate = new Date(profile.banned_until);
+          if (banDate > new Date()) {
+            await supabase.auth.signOut(); // Kick them out instantly
+            Alert.alert(
+              "Account Suspended",
+              `Your account has been suspended due to multiple community reports. Suspension ends: ${banDate.toLocaleDateString()}`,
+              [{ text: "OK" }],
+            );
+            return; // Stop the login process
+          } else {
+            // If the 30 days are over, unban them automatically
+            await supabase.from('profiles').update({ is_banned: false, report_count: 0 }).eq('id', data.user.id);
+          }
         }
+
+        // 3. Handle Deletion Recovery (Your existing code)
+        if (profile?.deleted_at) {
+          await supabase.from('profiles').update({ deleted_at: null }).eq('id', data.user.id);
+          await new Promise((resolve) => {
+            Alert.alert("Welcome Back!", "Your account deletion request has been cancelled.", [{ text: "OK", onPress: resolve }]);
+          });
+        }
+
+        await supabase.from('profiles').upsert({ id: data.user.id, phone: e164 }, { onConflict: 'id' });
       }
 
-      // 3. Handle Deletion Recovery (Your existing code)
-      if (profile?.deleted_at) {
-        await supabase.from('profiles').update({ deleted_at: null }).eq('id', data.user.id);
-        await new Promise((resolve) => {
-          Alert.alert("Welcome Back!", "Your account deletion request has been cancelled.", [{ text: "OK", onPress: resolve }]);
-        });
-      }
-
-      await supabase.from('profiles').upsert({ id: data.user.id, phone: phone }, { onConflict: 'id' });
+      router.replace('/home');
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      Alert.alert('Error', err.message || 'Verification failed.');
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
-    router.replace('/home'); 
   };
 
   return (
@@ -115,7 +168,7 @@ export default function LoginScreen() {
           <View style={styles.form}>
             <TextInput
               style={styles.input}
-              placeholder="e.g. 919999999999"
+              placeholder="e.g. 9876543210 or +919876543210"
               value={phone}
               onChangeText={setPhone}
               keyboardType="phone-pad"

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator, Image } from 'react-native';
 import { supabase } from '../supabase'; 
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -8,7 +8,8 @@ import { Ionicons } from '@expo/vector-icons';
 
 export default function EditPost() {
   const router = useRouter();
-  const { id } = useLocalSearchParams(); // Gets the listing ID from the URL
+  const { id: rawListingId } = useLocalSearchParams<{ id?: string | string[] }>();
+  const listingId = Array.isArray(rawListingId) ? rawListingId[0] : rawListingId;
 
   const [title, setTitle] = useState('');
   const [price, setPrice] = useState('');
@@ -22,16 +23,17 @@ export default function EditPost() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Fetch existing data when screen loads
-  useEffect(() => {
-    if (id) fetchListingDetails();
-  }, [id]);
+  const fetchListingDetails = useCallback(async () => {
+    if (!listingId) {
+      Alert.alert("Error", "Missing listing ID.");
+      router.back();
+      return;
+    }
 
-  const fetchListingDetails = async () => {
     const { data, error } = await supabase
       .from('listings')
       .select('*')
-      .eq('id', id)
+      .eq('id', listingId)
       .single();
 
     if (data && !error) {
@@ -48,7 +50,12 @@ export default function EditPost() {
       router.back();
     }
     setLoading(false);
-  };
+  }, [listingId, router]);
+
+  // Fetch existing data when screen loads
+  useEffect(() => {
+    void fetchListingDetails();
+  }, [fetchListingDetails]);
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -99,7 +106,7 @@ export default function EditPost() {
         location: location,
         description: description,
         image_urls: uploadedImageUrl ? [uploadedImageUrl] : [], 
-      }).eq('id', id);
+      }).eq('id', listingId);
 
       if (dbError) throw dbError;
 

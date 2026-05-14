@@ -1,12 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator, Dimensions, FlatList, Image, Linking,
+  ActivityIndicator, Alert, Dimensions, Image, Linking,
   Platform, ScrollView, Share, StyleSheet, Text,
   TouchableOpacity, View,
 } from 'react-native';
 import { supabase } from '../../supabase';
+import { getCurrentUser } from '../../utils/auth';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const CARD_W = (SCREEN_W - 48) / 2; // 2-column grid with padding
@@ -55,7 +56,7 @@ const ReviewCard = ({ review }: { review: any }) => {
         </View>
       </View>
       {review.review_text ? (
-        <Text style={s.reviewText}>"{review.review_text}"</Text>
+        <Text style={s.reviewText}>{`"${review.review_text}"`}</Text>
       ) : null}
       {review.listing?.title ? (
         <View style={s.reviewListingTag}>
@@ -69,7 +70,8 @@ const ReviewCard = ({ review }: { review: any }) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 export default function PublicProfile() {
-  const { id: userId } = useLocalSearchParams();
+  const { id: rawUserId } = useLocalSearchParams<{ id?: string | string[] }>();
+  const userId = Array.isArray(rawUserId) ? rawUserId[0] : rawUserId;
   const router = useRouter();
 
   const [profile, setProfile]       = useState<any>(null);
@@ -81,11 +83,13 @@ export default function PublicProfile() {
   const [activeTab, setActiveTab]   = useState<'listings' | 'reviews'>('listings');
   const [totalSold, setTotalSold]   = useState(0);
 
-  useEffect(() => { fetchAll(); }, [userId]);
-
-  const fetchAll = async () => {
+  const fetchAll = useCallback(async () => {
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getCurrentUser();
     if (user) setCurrentUserId(user.id);
 
     // Profile
@@ -124,13 +128,39 @@ export default function PublicProfile() {
     if (reviewsData) setReviews(reviewsData);
 
     setLoading(false);
-  };
+  }, [userId]);
+
+  useEffect(() => {
+    void fetchAll();
+  }, [fetchAll]);
 
   const handleMessage = async () => {
     if (!currentUserId) return router.push('/' as any);
     if (currentUserId === userId) return;
     // Navigate to their most recent listing's chat — or open a generic DM
-    router.push(`/user/${userId}/message` as any);
+    const latestListing = listings[0];
+
+    if (!latestListing) {
+      Alert.alert('No Active Listings', 'This seller does not have any active listings to chat about right now.');
+      return;
+    }
+
+    const { data: existingChat } = await supabase
+      .from('chats')
+      .select('id')
+      .eq('listing_id', latestListing.id)
+      .eq('buyer_id', currentUserId)
+      .eq('seller_id', latestListing.seller_id)
+      .maybeSingle();
+
+    if (existingChat?.id) {
+      router.push(`/chat/${existingChat.id}` as any);
+      return;
+    }
+
+    router.push(
+      `/chat/new?listing_id=${latestListing.id}&seller_id=${latestListing.seller_id}&listing_title=${encodeURIComponent(latestListing.title)}&listing_price=${latestListing.price}` as any
+    );
   };
 
   const handleShare = async () => {
