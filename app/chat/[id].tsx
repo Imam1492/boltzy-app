@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, FlatList, TouchableOpacity,
   KeyboardAvoidingView, Platform, StyleSheet, ActivityIndicator,
-  Modal, Alert, Animated, Image, TouchableWithoutFeedback, Dimensions,
+  Modal, Alert, Animated, Image, TouchableWithoutFeedback, Dimensions,PanResponder,
 } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { supabase } from '../../supabase';
 import { Ionicons } from '@expo/vector-icons';

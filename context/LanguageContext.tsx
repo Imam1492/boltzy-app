@@ -1,7 +1,7 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { I18nextProvider, useTranslation } from 'react-i18next';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View, ActivityIndicator } from 'react-native';
+import { ActivityIndicator, View } from 'react-native';
 
 import i18n, { normalizeLanguage, type SupportedLanguage } from '../i18n';
 import { supabase } from '../supabase';
@@ -150,7 +150,6 @@ export const useLanguage = () => {
       t: (key: string) => key, // Just returns the text normally
       translateUGC: (text: string) => text,
       setLang: () => {},
-      languageOptions: []
     };
   }
   

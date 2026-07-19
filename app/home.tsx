@@ -44,28 +44,6 @@ const QUICK_CITIES = [
   'Delhi','Bengaluru','Chennai','Pune','Telangana',
 ];
 
-/** @handle for profile card: DB `username`, else slug from display name, else phone-based fallback. */
-function resolveProfilePublicHandle(
-  username: string | undefined,
-  displayName: string | undefined,
-  phone: string | undefined,
-): string {
-  const u = username?.trim();
-  if (u) return u;
-  const raw = displayName?.trim();
-  if (raw) {
-    const slug = raw
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/gi, '_')
-      .replace(/^_+|_+$/g, '')
-      .slice(0, 30);
-    if (slug) return slug;
-  }
-  const digits = (phone ?? '').replace(/\D/g, '');
-  if (digits.length >= 4) return `user_${digits.slice(-8)}`;
-  return '';
-}
-
 // ✨ SMART INITIALS ENGINE
 export const getInitials = (name?: string) => {
   if (!name || typeof name !== 'string') return '?';
@@ -646,13 +624,39 @@ const fetchListings = async ({ force = false, pullToRefresh = false }: { force?:
     const user = await getCurrentUser();
     if (user) {
       const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
-      
-   setProfileData({ 
-        email: user.email, 
-        phone: user.phone, 
-        name: data?.real_name || '',         
-        username: data?.display_name || '',  
-        avatar_url: data?.avatar_url || '' 
+
+      const realName = (data?.real_name || '').trim();
+      const publicUsername = (data?.username || data?.display_name || '').trim();
+
+      // #region agent log
+      fetch('http://127.0.0.1:7546/ingest/42e54d35-cc8a-4b1b-bffe-c2beae8d3b77', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '6726c7' },
+        body: JSON.stringify({
+          sessionId: '6726c7',
+          location: 'app/home.tsx:openProfileModal',
+          message: 'profile_fields_loaded',
+          data: {
+            hasRealName: !!realName,
+            hasUsernameCol: !!(data?.username || '').trim(),
+            hasDisplayName: !!(data?.display_name || '').trim(),
+            realNameLen: realName.length,
+            usernameLen: publicUsername.length,
+            sameValue: realName.length > 0 && realName === publicUsername,
+          },
+          timestamp: Date.now(),
+          runId: 'profile-fix',
+          hypothesisId: 'H3',
+        }),
+      }).catch(() => {});
+      // #endregion
+
+      setProfileData({
+        email: user.email,
+        phone: user.phone || data?.phone || '',
+        name: realName,
+        username: publicUsername,
+        avatar_url: data?.avatar_url || '',
       });
     }
     setLoadingProfile(false);
@@ -1298,13 +1302,18 @@ return (
                   }
                 </View>
                 
-                <Text style={styles.profileModalName}>{translateUGC(profileData?.name) || t('Setup your name')}</Text>
-                
+                <Text style={styles.profileModalName}>
+                  {profileData?.name || t('Setup your name')}
+                </Text>
+
                <View style={styles.profileUsernameRow}>
-                  {(() => {
-                    const handle = resolveProfilePublicHandle(profileData?.username, profileData?.name, profileData?.phone);
-                    return handle ? <Text style={styles.profileModalUsernameText}>@{translateUGC(handle)}</Text> : <Text style={[styles.profileModalUsernameText, { color: '#999' }]}>{t('profile_no_username')}</Text>;
-                  })()}
+                  {profileData?.username ? (
+                    <Text style={styles.profileModalUsernameText}>@{profileData.username}</Text>
+                  ) : (
+                    <Text style={[styles.profileModalUsernameText, { color: '#999' }]}>
+                      {t('profile_no_username')}
+                    </Text>
+                  )}
                   <TouchableOpacity style={styles.profileEditIconBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/profile' as any); }}>
                     <Ionicons name="pencil" size={14} color="#007AFF" />
                   </TouchableOpacity>
