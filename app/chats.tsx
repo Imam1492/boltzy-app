@@ -3,16 +3,27 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator, Alert, FlatList, Image, Platform, StyleSheet,
-  Text, TextInput, TouchableOpacity, View,
+  Text, TextInput, TouchableOpacity, View, Modal, TouchableWithoutFeedback, KeyboardAvoidingView
 } from 'react-native';
 import { supabase } from '../supabase';
 import { getCurrentUser } from '../utils/auth';
-import { getLocalizedListingField, getLocalizedMessageContent } from '../utils/localizedContent';
-import { useLanguage } from '../context/LanguageContext'; // ✨ IMPORTED TRANSLATOR
+import { getLocalizedMessageContent } from '../utils/localizedContent';
+import { useLanguage } from '../context/LanguageContext';
 
-const INBOX_CACHE_TTL_MS = 20_000;
-
-let inboxCache: { userId: string; fetchedAt: number; data: any[] } | null = null;
+// ✨ SMART INITIALS ENGINE (Safely uses only what is available)
+export const getInitials = (name?: string) => {
+  if (!name || typeof name !== 'string') return '?';
+  const cleanName = name.trim();
+  if (!cleanName) return '?';
+  const words = cleanName.split(/\s+/);
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase();
+  } else {
+    const word = words[0];
+    if (word.length === 1) return word[0].toUpperCase();
+    return (word[0] + word[word.length - 1]).toUpperCase();
+  }
+};
 
 export default function Inbox() {
   const router = useRouter();
@@ -24,73 +35,28 @@ export default function Inbox() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  
+  const [pinModalVisible, setPinModalVisible] = useState(false);
+  const [chatMenuVisible, setChatMenuVisible] = useState(false);
+  const [starModalVisible, setStarModalVisible] = useState(false);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [starNickname, setStarNickname] = useState('');
+  
+  const [activeTab, setActiveTab] = useState<'selling' | 'buying'>('selling');
+  const [filterMode, setFilterMode] = useState<'all' | 'unread'>('all');
+  const [selectedListingId, setSelectedListingId] = useState<string | null>(null);
+
   const currentUserIdRef = useRef<string | null>(null);
   const chatRoomsRef = useRef<any[]>([]);
-  const inboxRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fetchInFlightRef = useRef(false);
 
-  useEffect(() => {
-    currentUserIdRef.current = currentUserId;
-  }, [currentUserId]);
+  useEffect(() => { currentUserIdRef.current = currentUserId; }, [currentUserId]);
+  useEffect(() => { chatRoomsRef.current = chatRooms; }, [chatRooms]);
 
-  useEffect(() => {
-    chatRoomsRef.current = chatRooms;
+  useFocusEffect(useCallback(() => { void fetchChats({ force: true }); }, []));
 
-    if (currentUserIdRef.current) {
-      inboxCache = {
-        userId: currentUserIdRef.current,
-        fetchedAt: Date.now(),
-        data: chatRooms,
-      };
-    }
-  }, [chatRooms]);
-
-  useFocusEffect(
-    useCallback(() => {
-      let isMounted = true;
-      void fetchChats();
-
-      const queueInboxRefresh = () => {
-        if (inboxRefreshTimeoutRef.current) {
-          clearTimeout(inboxRefreshTimeoutRef.current);
-        }
-
-        inboxRefreshTimeoutRef.current = setTimeout(() => {
-          if (isMounted) {
-            void fetchChats({ force: true, background: true });
-          }
-          inboxRefreshTimeoutRef.current = null;
-        }, 250);
-      };
-
-      const channel = supabase
-        .channel('inbox_realtime_updates')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
-          queueInboxRefresh();
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'chats' }, () => {
-          queueInboxRefresh();
-        })
-        .subscribe();
-
-      return () => {
-        isMounted = false;
-        if (inboxRefreshTimeoutRef.current) {
-          clearTimeout(inboxRefreshTimeoutRef.current);
-          inboxRefreshTimeoutRef.current = null;
-        }
-        supabase.removeChannel(channel);
-        setSelectionMode(false);
-        setSelectedIds([]);
-      };
-    }, [])
-  );
-
-  const fetchChats = async (
-    { force = false, background = false }: { force?: boolean; background?: boolean } = {}
-  ) => {
+  const fetchChats = async ({ force = false }: { force?: boolean } = {}) => {
     let userId = currentUserIdRef.current;
-
     if (!userId) {
       const user = await getCurrentUser();
       if (!user) return;
@@ -99,676 +65,403 @@ export default function Inbox() {
       setCurrentUserId(user.id);
     }
 
-    if (
-      !force &&
-      inboxCache &&
-      inboxCache.userId === userId &&
-      Date.now() - inboxCache.fetchedAt < INBOX_CACHE_TTL_MS
-    ) {
-      setChatRooms(inboxCache.data);
-      setLoading(false);
-      return;
-    }
-
-    if (fetchInFlightRef.current) {
-      return;
-    }
-
+    if (fetchInFlightRef.current) return;
     fetchInFlightRef.current = true;
+    if (chatRoomsRef.current.length === 0) setLoading(true);
 
-    if (!background && chatRoomsRef.current.length === 0) {
-      setLoading(true);
-    }
+   try {
+      // ✨ CRASH-PROOF QUERY: 'translations' removed from the messages fetch!
+      const { data, error } = await supabase.from('chats').select(`
+         *,
+         listings(id, title, price, image_urls, translations),
+         buyer:profiles!buyer_id(id, display_name, real_name, avatar_url),
+         seller:profiles!seller_id(id, display_name, real_name, avatar_url),
+         messages(id, is_read, sender_id, content, created_at, type, is_system, is_deleted_for_everyone)
+      `).or(`buyer_id.eq.${userId},seller_id.eq.${userId}`);
 
-    const runChatsQuery = (includeTranslations: boolean) =>
-      supabase
-        .from('chats')
-        .select(
-          includeTranslations
-            ? `
-                id, buyer_id, seller_id, listing_id, is_sold, is_pinned, pinned_at, hidden_by, created_at,
-                listings(title, image_urls, translations),
-                buyer:profiles!buyer_id(display_name, avatar_url),
-                seller:profiles!seller_id(display_name, avatar_url),
-                messages(
-                  is_read,
-                  sender_id,
-                  content,
-                  translations,
-                  created_at,
-                  type,
-                  is_system,
-                  is_deleted_for_everyone
-                )
-              `
-            : `
-                id, buyer_id, seller_id, listing_id, is_sold, is_pinned, pinned_at, hidden_by, created_at,
-                listings(title, image_urls),
-                buyer:profiles!buyer_id(display_name, avatar_url),
-                seller:profiles!seller_id(display_name, avatar_url),
-                messages(
-                  is_read,
-                  sender_id,
-                  content,
-                  created_at,
-                  type,
-                  is_system,
-                  is_deleted_for_everyone
-                )
-              `
-        )
-        .or(`buyer_id.eq.${userId},seller_id.eq.${userId}`);
+      if (error) throw error;
 
-    try {
-      let { data, error } = await runChatsQuery(true);
+      const processed = (data ?? []).filter((chat) => !(chat.hidden_by || []).includes(userId)).map((chat) => {
+        const isBuyer = chat.buyer_id === userId;
+        const otherPerson = isBuyer ? chat.seller : chat.buyer;
+        
+        // Safely map stars and pins (falls back to old shared columns if new ones aren't in DB yet)
+        const is_starred = isBuyer ? (chat.buyer_starred || chat.is_starred) : (chat.seller_starred || chat.is_starred);
+        const chat_nickname = isBuyer ? (chat.buyer_nickname || chat.chat_nickname) : (chat.seller_nickname || chat.chat_nickname);
+        const pinned_until = isBuyer ? chat.buyer_pinned_until : chat.seller_pinned_until;
+        const isPinActive = pinned_until ? new Date(pinned_until) > new Date() : (isBuyer ? (chat.buyer_pinned || chat.is_pinned) : (chat.seller_pinned || chat.is_pinned));
 
-      if (error) {
-        console.warn('[fetchChats] localized query failed, retrying without translations:', error.message);
-        const fallback = await runChatsQuery(false);
-        data = fallback.data;
-        error = fallback.error;
-      }
+        const unreadCount = chat.messages ? chat.messages.filter((m: any) => !m.is_read && m.sender_id !== userId).length : 0;
+        const sorted = chat.messages ? [...chat.messages].sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) : [];
+        const lastMessageRecord = sorted[0] ?? null;
+        const lastMessageTime = lastMessageRecord?.created_at ?? chat.created_at;
 
-      if (error) {
-        console.error('[fetchChats] failed:', error.message);
-        return;
-      }
-
-      const processed = (data ?? [])
-        .filter((chat) => {
-          const hiddenBy: string[] = chat.hidden_by || [];
-          return !hiddenBy.includes(userId);
-        })
-        .map((chat) => {
-          const isBuyer = chat.buyer_id === userId;
-          const otherPerson = isBuyer ? chat.seller : chat.buyer;
-
-          const unreadCount = chat.messages
-            ? chat.messages.filter((m: any) => !m.is_read && m.sender_id !== userId).length
-            : 0;
-
-          const sorted = chat.messages
-            ? [...chat.messages].sort(
-                (a: any, b: any) =>
-                  new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-              )
-            : [];
-
-          const lastMessageRecord = sorted[0] ?? null;
-          const lastMessageTime = lastMessageRecord?.created_at ?? chat.created_at;
-
-          return { ...chat, otherPerson, unreadCount, lastMessageRecord, lastMessageTime };
-        });
+        return { ...chat, otherPerson, unreadCount, lastMessageRecord, lastMessageTime, isPinActive, is_starred, chat_nickname };
+      });
 
       processed.sort((a, b) => {
-        if (a.is_pinned && !b.is_pinned) return -1;
-        if (!a.is_pinned && b.is_pinned) return 1;
+        if (a.isPinActive && !b.isPinActive) return -1;
+        if (!a.isPinActive && b.isPinActive) return 1;
         return new Date(b.lastMessageTime).getTime() - new Date(a.lastMessageTime).getTime();
       });
 
-      inboxCache = { userId, fetchedAt: Date.now(), data: processed };
       setChatRooms(processed);
+    } catch (e: any) {
+      console.error('[fetchChats] failed:', e);
+      if (Platform.OS === 'web') window.alert("Fetch Error: " + e.message);
+      else Alert.alert("Fetch Error", e.message);
     } finally {
       fetchInFlightRef.current = false;
       setLoading(false);
     }
   };
 
-  const togglePin = async (chatId: string, currentlyPinned: boolean) => {
-    const nextPinned = !currentlyPinned;
+  const openPinMenu = (chatId: string) => {
+    const chat = chatRooms.find(c => c.id === chatId);
+    if (!chat) return;
+
+    if (chat.isPinActive) {
+      if (Platform.OS === 'web') {
+        if (window.confirm("Unpin this chat?")) applyPin(chat.id, 0);
+      } else {
+        Alert.alert(t('pinned') || 'Pinned', 'Unpin this conversation?', [
+          { text: 'Unpin', style: 'destructive', onPress: () => applyPin(chat.id, 0) }, { text: 'Cancel', style: 'cancel' }
+        ]);
+      }
+    } else {
+      const currentPins = chatRooms.filter(c => c.isPinActive).length;
+      if (currentPins >= 2) {
+        if (Platform.OS === 'web') window.alert("Limit Reached: Max 2 pinned chats.");
+        else Alert.alert('Pin Limit', 'You can only pin a maximum of 2 chats at a time.');
+        return;
+      }
+      setPinModalVisible(true);
+    }
+  };
+
+  const applyPin = async (chatId: string, days: number) => {
+    const chat = chatRooms.find(c => c.id === chatId);
+    if (!chat) return;
+    const isBuyer = chat.buyer_id === currentUserIdRef.current;
+    const isPinning = days > 0;
+    
+    let pinnedUntil = null;
+    if (isPinning) {
+      const exp = new Date(); exp.setDate(exp.getDate() + days);
+      pinnedUntil = exp.toISOString();
+    }
 
     setChatRooms((prev) => {
-      const updated = prev.map((c) =>
-        c.id === chatId
-          ? { ...c, is_pinned: nextPinned, pinned_at: nextPinned ? new Date().toISOString() : null }
-          : c
-      );
-
+      const updated = prev.map((c) => c.id === chatId ? { ...c, isPinActive: isPinning } : c);
       return [...updated].sort((a, b) => {
-        if (a.is_pinned && !b.is_pinned) return -1;
-        if (!a.is_pinned && b.is_pinned) return 1;
+        if (a.isPinActive && !b.isPinActive) return -1;
+        if (!a.isPinActive && b.isPinActive) return 1;
         return new Date(b.lastMessageTime).getTime() - new Date(a.lastMessageTime).getTime();
       });
     });
 
-    const { error } = await supabase
-      .from('chats')
-      .update({
-        is_pinned: nextPinned,
-        pinned_at: nextPinned ? new Date().toISOString() : null,
-      })
-      .eq('id', chatId);
+    const payload = isBuyer ? { buyer_pinned: isPinning, buyer_pinned_until: pinnedUntil } : { seller_pinned: isPinning, seller_pinned_until: pinnedUntil };
+    await supabase.from('chats').update(payload).eq('id', chatId);
+  };
 
-    if (error) {
-      Alert.alert('Error', 'Could not update pin status.');
-      fetchChats();
+  const openStarMenu = (chatId: string) => {
+    const chat = chatRooms.find(c => c.id === chatId);
+    if (!chat) return;
+    setStarNickname(chat.chat_nickname || '');
+    setStarModalVisible(true);
+  };
+
+  const applyStar = async () => {
+    if (!activeChatId) return;
+    const chat = chatRooms.find(c => c.id === activeChatId);
+    const isBuyer = chat?.buyer_id === currentUserIdRef.current;
+    const nickname = starNickname.trim() || null;
+    
+    setChatRooms(prev => prev.map(c => c.id === activeChatId ? { ...c, is_starred: true, chat_nickname: nickname } : c));
+    setStarModalVisible(false);
+
+    const payload = isBuyer ? { buyer_starred: true, buyer_nickname: nickname } : { seller_starred: true, seller_nickname: nickname };
+    await supabase.from('chats').update(payload).eq('id', activeChatId);
+  };
+
+  const removeStar = async () => {
+    if (!activeChatId) return;
+    const chat = chatRooms.find(c => c.id === activeChatId);
+    const isBuyer = chat?.buyer_id === currentUserIdRef.current;
+    
+    setChatRooms(prev => prev.map(c => c.id === activeChatId ? { ...c, is_starred: false, chat_nickname: null } : c));
+    setStarModalVisible(false);
+
+    const payload = isBuyer ? { buyer_starred: false, buyer_nickname: null } : { seller_starred: false, seller_nickname: null };
+    await supabase.from('chats').update(payload).eq('id', activeChatId);
+  };
+
+  const confirmDeleteChat = async (chatId: string) => {
+    const msg = 'This will remove this chat from your inbox. The other person will still see it.';
+    if (Platform.OS === 'web') {
+      if (window.confirm(msg)) executeChatDelete(chatId);
+    } else {
+      Alert.alert('Delete Chat', msg, [
+        { text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => executeChatDelete(chatId) },
+      ]);
     }
   };
 
-  const deleteChat = async (chatId: string) => {
-    Alert.alert(
-      'Delete Chat',
-      'This will remove this chat from your inbox. The other person will still see it.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            if (!currentUserId) return;
-
-            setChatRooms((prev) => prev.filter((c) => c.id !== chatId));
-
-            const chat = chatRooms.find((c) => c.id === chatId);
-            const existing: string[] = chat?.hidden_by || [];
-
-            if (!existing.includes(currentUserId)) {
-              const { error } = await supabase
-                .from('chats')
-                .update({ hidden_by: [...existing, currentUserId] })
-                .eq('id', chatId);
-
-              if (error) {
-                Alert.alert('Error', 'Could not delete chat.');
-                fetchChats();
-              }
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const deleteSelected = () => {
-    if (!currentUserId || selectedIds.length === 0) return;
-
-    Alert.alert(
-      'Delete Selected Chats',
-      `This will remove ${selectedIds.length} chat${selectedIds.length === 1 ? '' : 's'} from your inbox. Other people will still see them.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            const idsToDelete = [...selectedIds];
-            const snapshot = chatRooms;
-
-            setChatRooms((prev) => prev.filter((c) => !idsToDelete.includes(c.id)));
-            setSelectedIds([]);
-            setSelectionMode(false);
-
-            const results = await Promise.all(
-              idsToDelete.map(async (id) => {
-                const chat = snapshot.find((c) => c.id === id);
-                const existing: string[] = chat?.hidden_by || [];
-
-                if (existing.includes(currentUserId)) return null;
-
-                return supabase
-                  .from('chats')
-                  .update({ hidden_by: [...existing, currentUserId] })
-                  .eq('id', id);
-              })
-            );
-
-            const hasError = results.some((result) => result?.error);
-            if (hasError) {
-              Alert.alert('Error', 'Could not delete some chats.');
-              fetchChats();
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const handleLongPress = (chatId: string) => {
-    setSelectionMode(true);
-    setSelectedIds([chatId]);
-  };
-
-  const toggleSelect = (chatId: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(chatId) ? prev.filter((id) => id !== chatId) : [...prev, chatId]
-    );
-  };
-
-  const exitSelectionMode = () => {
-    setSelectionMode(false);
-    setSelectedIds([]);
-  };
-
-  const localizedPreviewText = (message?: any) => {
-    if (!message) return t('no_msg');
-    if (message.is_deleted_for_everyone) return `🚫 ${t('chat_message_deleted')}`;
-    if (message.type === 'image') return `📷 ${t('chat_photo')}`;
-    if (message.type === 'location') return `📍 ${t('chat_location')}`;
-    if (message.type === 'contact') return `👤 ${t('chat_contact')}`;
-
-    const rawContent = String(message.content ?? '');
-    if ((message.type === 'system' || message.is_system || rawContent.startsWith('🎉')) && rawContent.startsWith('🎉')) {
-      return `🎉 ${t('chat_item_sold')}`;
+  const executeChatDelete = async (chatId: string) => {
+    if (!currentUserIdRef.current) return;
+    setChatRooms((prev) => prev.filter((c) => c.id !== chatId));
+    const chat = chatRoomsRef.current.find((c) => c.id === chatId);
+    const existing: string[] = chat?.hidden_by || [];
+    if (!existing.includes(currentUserIdRef.current)) {
+      await supabase.from('chats').update({ hidden_by: [...existing, currentUserIdRef.current] }).eq('id', chatId);
     }
-
-    return getLocalizedMessageContent(message, lang);
   };
 
-  const filteredChats = chatRooms.filter((chat) => {
+  const getStandardChatList = () => chatRooms.filter(chat => {
+    if (filterMode === 'unread' && chat.unreadCount === 0) return false;
+    const isBuying = chat.buyer_id === currentUserIdRef.current;
+    if (activeTab === 'buying' && !isBuying) return false;
+    if (activeTab === 'selling' && isBuying) return false;
     if (!searchQuery.trim()) return true;
-
     const q = searchQuery.toLowerCase();
-    const localizedTitle = getLocalizedListingField(chat.listings, 'title', lang).toLowerCase();
-    const localizedLastMessage = localizedPreviewText(chat.lastMessageRecord).toLowerCase();
-
-    return (
-      (chat.otherPerson?.display_name ?? '').toLowerCase().includes(q) ||
-      localizedTitle.includes(q) ||
-      localizedLastMessage.includes(q)
-    );
+    const title = (chat.listings?.translations?.[lang]?.title || translateUGC(chat.listings?.title) || '').toLowerCase();
+    const nick = (chat.chat_nickname || '').toLowerCase();
+    return ((chat.otherPerson?.display_name || '').toLowerCase().includes(q) || title.includes(q) || nick.includes(q));
   });
-
-  const selectAll = () => {
-    setSelectedIds(filteredChats.map((c) => c.id));
-  };
-
-  const formatTime = (dateStr: string) => {
-    const d = new Date(dateStr);
-    const now = new Date();
-    const diff = Math.floor((now.getTime() - d.getTime()) / 86400000);
-
-    if (diff === 0) {
-      return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-    }
-    if (diff === 1) return 'Yesterday';
-    if (diff < 7) return d.toLocaleDateString('en-IN', { weekday: 'short' });
-    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-  };
-
-  const previewText = (msg: string) => {
-    if (msg === 'No messages yet') return t('no_msg');
-    if (msg.startsWith('📷')) return '📷 Photo';
-    if (msg.startsWith('📍')) return '📍 Location';
-    if (msg.startsWith('👤')) return '👤 Contact';
-    if (msg.startsWith('🎉')) return '🎉 Item marked as sold';
-    if (msg.startsWith('🚫')) return '🚫 Message deleted';
-    return translateUGC(msg); // ✨ TRANSLATE USER CHAT MESSAGES
-  };
-  void previewText;
 
   const renderChatItem = ({ item }: { item: any }) => {
     const isSelected = selectedIds.includes(item.id);
-    const itemImage = item.listings?.image_urls?.[0];
     const hasUnread = item.unreadCount > 0;
+    const itemImage = item.listings?.image_urls?.[0];
+    const displayTitle = item.listings?.translations?.[lang]?.title || translateUGC(item.listings?.title) || '—';
+    const displayPrice = item.listings?.price ? `₹${Number(item.listings.price).toLocaleString('en-IN')}` : '';
+    
+   // ✨ FIX: Safely grab their real name, ignoring the tag for now
+    const displayName = item.otherPerson?.real_name || item.otherPerson?.display_name || 'Unknown User';
 
     return (
-      <TouchableOpacity
-        style={[styles.chatCard, isSelected && styles.chatCardSelected]}
-        onPress={() => {
-          if (selectionMode) {
-            toggleSelect(item.id);
-            return;
-          }
-          router.push(`/chat/${item.id}` as any);
-        }}
-        onLongPress={() => handleLongPress(item.id)}
-        activeOpacity={0.75}
-      >
-        {selectionMode && (
-          <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
-            {isSelected && <Ionicons name="checkmark" size={14} color="#fff" />}
-          </View>
-        )}
-
-        <View style={styles.imageWrapper}>
-          {itemImage ? (
-            <Image source={{ uri: itemImage }} style={styles.itemThumb} />
-          ) : (
-            <View
-              style={[
-                styles.itemThumb,
-                { backgroundColor: '#eee', justifyContent: 'center', alignItems: 'center' },
-              ]}
-            >
-              <Ionicons name="image-outline" size={22} color="#ccc" />
-            </View>
-          )}
-
-          <View style={styles.avatarOverlay}>
-            {item.otherPerson?.avatar_url ? (
-              <Image source={{ uri: item.otherPerson.avatar_url }} style={styles.avatarMini} />
-            ) : (
-              <View style={styles.avatarMiniPlaceholder}>
-                <Text style={styles.avatarMiniText}>
-                  {item.otherPerson?.display_name?.[0]?.toUpperCase() || '?'}
-                </Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        <View style={styles.chatInfo}>
-          <View style={styles.nameRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
-              {item.is_pinned && (
-                <Ionicons
-                  name="pin"
-                  size={12}
-                  color="#007AFF"
-                  style={{ transform: [{ rotate: '45deg' }] }}
-                />
+      <View style={[styles.chatCard, isSelected && styles.chatCardSelected]}>
+        <TouchableOpacity style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }} onPress={() => router.push(`/chat/${item.id}` as any)} activeOpacity={0.7}>
+          <View style={styles.imageWrapper}>
+            {itemImage ? <Image source={{ uri: itemImage }} style={styles.itemThumb} /> : <View style={[styles.itemThumb, styles.itemThumbFallback]}><Ionicons name="image-outline" size={22} color="#ccc" /></View>}
+            <View style={styles.avatarOverlay}>
+              {item.otherPerson?.avatar_url && item.otherPerson.avatar_url.trim() !== '' ? (
+                <Image source={{ uri: item.otherPerson.avatar_url }} style={styles.avatarMini} />
+              ) : (
+                <View style={styles.avatarMiniPlaceholder}>
+                {/* ✨ FIX: Properly uses real_name for initials! */}
+                  <Text style={styles.avatarMiniText}>{getInitials(item.otherPerson?.real_name || item.otherPerson?.display_name || '?')}</Text>
+                </View>
               )}
-              <Text style={[styles.otherName, hasUnread && styles.otherNameBold]} numberOfLines={1}>
-                {item.otherPerson?.display_name || t('Unknown User')}
-              </Text>
             </View>
-            <Text style={styles.timeText}>{formatTime(item.lastMessageTime)}</Text>
           </View>
 
-          {/* ✨ TRANSLATE AD TITLE IN CHAT LIST ✨ */}
-          <Text style={styles.itemTitle} numberOfLines={1}>
-            {getLocalizedListingField(item.listings, 'title', lang) || '—'}
-          </Text>
-
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={[styles.lastMessage, hasUnread && styles.lastMessageBold]} numberOfLines={1}>
-              {localizedPreviewText(item.lastMessageRecord)}
-            </Text>
-            {hasUnread && (
-              <View style={styles.unreadBadge}>
-                <Text style={styles.unreadBadgeText}>
-                  {item.unreadCount > 99 ? '99+' : item.unreadCount}
-                </Text>
+          <View style={styles.chatInfo}>
+           <View style={styles.nameRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                {item.isPinActive && <Ionicons name="pin" size={12} color="#007AFF" style={{ transform: [{ rotate: '45deg' }] }} />}
+                
+                {/* 1. The Normal Name */}
+                <Text style={[styles.otherName, hasUnread && styles.otherNameBold]} numberOfLines={1}>{displayName}</Text>
+                
+                {/* 2. ✨ THE NEW TAG UI ✨ */}
+                {item.is_starred && item.chat_nickname ? (
+                  <View style={{ backgroundColor: '#FFFBEB', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: '#FDE68A' }}>
+                    <Ionicons name="star" size={10} color="#F5A623" />
+                    <Text style={{ fontSize: 10, color: '#D97706', fontWeight: 'bold', maxWidth: 80 }} numberOfLines={1}>{item.chat_nickname}</Text>
+                  </View>
+                ) : null}
               </View>
-            )}
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <Text style={[styles.itemTitle, { flex: 1, marginRight: 8 }]} numberOfLines={1}>{displayTitle}</Text>
+              {displayPrice ? <Text style={{ fontSize: 13, color: '#007AFF', fontWeight: '700' }}>{displayPrice}</Text> : null}
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={[styles.lastMessage, hasUnread && styles.lastMessageBold]} numberOfLines={1}>{item.lastMessageRecord?.content || 'No messages'}</Text>
+              {hasUnread && <View style={styles.unreadBadge}><Text style={styles.unreadBadgeText}>{item.unreadCount > 99 ? '99+' : item.unreadCount}</Text></View>}
+            </View>
           </View>
-        </View>
+        </TouchableOpacity>
 
-        {!selectionMode && (
-          <View style={styles.quickActions}>
-            <TouchableOpacity
-              style={styles.quickActionBtn}
-              onPress={() => togglePin(item.id, !!item.is_pinned)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons
-                name={item.is_pinned ? 'pin' : 'pin-outline'}
-                size={18}
-                color={item.is_pinned ? '#007AFF' : '#888'}
-              />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.quickActionBtn}
-              onPress={() => deleteChat(item.id)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="trash-outline" size={18} color="#FF3B30" />
-            </TouchableOpacity>
-          </View>
-        )}
-      </TouchableOpacity>
+        <TouchableOpacity style={styles.quickActionBtn} onPress={() => { setActiveChatId(item.id); setChatMenuVisible(true); }} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+          <Ionicons name="ellipsis-vertical" size={20} color="#888" />
+        </TouchableOpacity>
+      </View>
     );
   };
 
+  const currentData = getStandardChatList();
+
   return (
     <View style={styles.container}>
-      {selectionMode ? (
-        <View style={styles.selectionHeader}>
-          <TouchableOpacity style={styles.selHeaderBtn} onPress={exitSelectionMode}>
-            <Ionicons name="close" size={24} color="#000" />
-          </TouchableOpacity>
-          <Text style={styles.selHeaderTitle}>
-            {selectedIds.length === 0 ? t('select_chats') : `${selectedIds.length} selected`}
-          </Text>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <TouchableOpacity style={styles.selHeaderBtn} onPress={selectAll}>
-              <Text style={styles.selAllText}>{t('all')}</Text>
-            </TouchableOpacity>
-            {selectedIds.length > 0 && (
-              <TouchableOpacity
-                style={[styles.selHeaderBtn, { backgroundColor: '#FF3B30' }]}
-                onPress={deleteSelected}
+        <View style={{ backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f0f0f0' }}>
+          <View style={[styles.header, { borderBottomWidth: 0, paddingBottom: 0 }]}>
+            <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color="#000" /></TouchableOpacity>
+            <Text style={styles.headerTitle}>{t('messages_title') || 'Messages'}</Text>
+            
+            {/* ✨ RESTORED: All/Unread Filter & Selection Mode */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <TouchableOpacity 
+                style={{ backgroundColor: filterMode === 'unread' ? '#007AFF' : '#f0f0f0', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14 }}
+                onPress={() => setFilterMode(prev => prev === 'all' ? 'unread' : 'all')}
               >
-                <Ionicons name="trash" size={18} color="#fff" />
+                <Text style={{ color: filterMode === 'unread' ? '#fff' : '#666', fontSize: 12, fontWeight: 'bold' }}>{filterMode === 'all' ? t('filter_all') || 'All' : t('filter_unread') || 'Unread'}</Text>
               </TouchableOpacity>
-            )}
+              <TouchableOpacity onPress={() => setSelectionMode(true)} style={styles.selectModeBtn}>
+                <Ionicons name="checkmark-circle-outline" size={26} color="#007AFF" />
+              </TouchableOpacity>
+            </View>
+          </View>
+          
+          <View style={{ flexDirection: 'row', paddingHorizontal: 16, paddingTop: 12 }}>
+            <TouchableOpacity style={[styles.tabBtn, activeTab === 'selling' && styles.tabBtnActive]} onPress={() => setActiveTab('selling')}>
+              <Text style={[styles.tabText, activeTab === 'selling' && styles.tabTextActive]}>{t('tab_selling') || 'Selling'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.tabBtn, activeTab === 'buying' && styles.tabBtnActive]} onPress={() => setActiveTab('buying')}>
+              <Text style={[styles.tabText, activeTab === 'buying' && styles.tabTextActive]}>{t('tab_buying') || 'Buying'}</Text>
+            </TouchableOpacity>
           </View>
         </View>
-      ) : (
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={28} color="#000" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>{t('messages_title')}</Text>
-          <TouchableOpacity onPress={() => setSelectionMode(true)} style={styles.selectModeBtn}>
-            <Ionicons name="checkmark-circle-outline" size={26} color="#007AFF" />
-          </TouchableOpacity>
-        </View>
-      )}
 
       <View style={styles.searchSection}>
         <View style={styles.searchBar}>
           <Ionicons name="search" size={18} color="#999" />
-          <TextInput
-            style={styles.searchInput}
-            placeholder={t('search_chats')}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholderTextColor="#bbb"
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Ionicons name="close-circle" size={18} color="#ccc" />
-            </TouchableOpacity>
-          )}
+          <TextInput style={styles.searchInput} placeholder={t('search_chats') || 'Search...'} value={searchQuery} onChangeText={setSearchQuery} placeholderTextColor="#bbb" />
+          {searchQuery.length > 0 && <TouchableOpacity onPress={() => setSearchQuery('')}><Ionicons name="close-circle" size={18} color="#ccc" /></TouchableOpacity>}
         </View>
       </View>
 
-      {filteredChats.some((c) => c.is_pinned) && !searchQuery && (
-        <View style={styles.sectionLabel}>
-          <Ionicons name="pin" size={12} color="#007AFF" />
-          <Text style={styles.sectionLabelText}>{t('pinned')}</Text>
-        </View>
-      )}
-
       {loading && chatRooms.length === 0 ? (
         <ActivityIndicator size="large" color="#000" style={{ marginTop: 50 }} />
-      ) : filteredChats.length === 0 ? (
+      ) : currentData.length === 0 ? (
         <View style={styles.emptyState}>
-          <View style={styles.emptyIconWrap}>
-            <Ionicons name="chatbubble-ellipses-outline" size={52} color="#ccc" />
-          </View>
-          {searchQuery ? (
-            <Text style={styles.emptyText}>{`No chats match "${searchQuery}"`}</Text>
-          ) : (
-            <Text style={styles.emptyText}>{t('no_msg')}</Text>
-          )}
-          <Text style={styles.emptySubText}>
-            {searchQuery ? 'Try a different search term.' : t('no_msg_sub')}
-          </Text>
+          <View style={styles.emptyIconWrap}><Ionicons name="chatbubble-ellipses-outline" size={52} color="#ccc" /></View>
+          <Text style={styles.emptyText}>{searchQuery ? `No matches for "${searchQuery}"` : (t('no_msg') || 'No messages')}</Text>
         </View>
       ) : (
-        <FlatList
-          data={filteredChats}
-          renderItem={renderChatItem}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
-        />
+        <FlatList data={currentData} renderItem={renderChatItem} keyExtractor={(item) => item.id} contentContainerStyle={styles.listContent} />
       )}
+
+      {/* ═══ 3-DOT ACTION MENU ════════════════════════════ */}
+      <Modal visible={chatMenuVisible} transparent animationType="slide">
+        <TouchableOpacity style={styles.bottomSheetOverlay} activeOpacity={1} onPress={() => setChatMenuVisible(false)}>
+          <View style={styles.bottomSheetCard}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Chat Options</Text>
+            
+            <TouchableOpacity style={styles.sheetAction} onPress={() => { setChatMenuVisible(false); setTimeout(() => openPinMenu(activeChatId as string), 300); }}>
+              <View style={[styles.sheetIconWrap, { backgroundColor: '#EFF6FF' }]}><Ionicons name="pin" size={20} color="#007AFF" /></View>
+              <Text style={styles.sheetActionText}>Pin / Unpin Chat</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.sheetAction} onPress={() => { setChatMenuVisible(false); setTimeout(() => openStarMenu(activeChatId as string), 300); }}>
+              <View style={[styles.sheetIconWrap, { backgroundColor: '#FFFBEB' }]}><Ionicons name="star" size={20} color="#F5A623" /></View>
+              <Text style={styles.sheetActionText}>{t('star_chat') || 'Star & Tag Chat'}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.sheetAction} onPress={() => { setChatMenuVisible(false); setTimeout(() => confirmDeleteChat(activeChatId as string), 300); }}>
+              <View style={[styles.sheetIconWrap, { backgroundColor: '#FEF2F2' }]}><Ionicons name="trash" size={20} color="#FF3B30" /></View>
+              <Text style={[styles.sheetActionText, { color: '#FF3B30' }]}>Delete Chat</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ═══ STAR MODAL ════════════════════════════ */}
+      <Modal visible={starModalVisible} transparent animationType="fade">
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlayCenter}>
+          <View style={styles.modalCardCenter}>
+            <View style={[styles.modalIconWrap, { backgroundColor: '#FFFBEB' }]}><Ionicons name="star" size={32} color="#F5A623" /></View>
+            <Text style={styles.modalTitleCenter}>{t('star_chat') || 'Star & Tag Chat'}</Text>
+            <Text style={styles.modalSubCenter}>Add a nickname so you remember who this is.</Text>
+            <TextInput style={styles.modalInput} placeholder={t('enter_tag') || 'Enter a nickname or tag...'} value={starNickname} onChangeText={setStarNickname} maxLength={20} autoFocus />
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
+              <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setStarModalVisible(false)}><Text style={styles.modalCancelText}>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.modalSaveBtn} onPress={applyStar}><Text style={styles.modalSaveText}>{t('save_tag') || 'Save Tag'}</Text></TouchableOpacity>
+            </View>
+            {chatRooms.find(c => c.id === activeChatId)?.is_starred && (
+              <TouchableOpacity style={{ marginTop: 20 }} onPress={removeStar}><Text style={{ color: '#FF3B30', fontWeight: 'bold' }}>{t('unstar_chat') || 'Remove Star'}</Text></TouchableOpacity>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ═══ PIN MODAL ════════════════════════════════════ */}
+      <Modal visible={pinModalVisible} transparent animationType="fade">
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.modalCardCenter}>
+            <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 12, textAlign: 'center' }}>Pin Chat</Text>
+            <Text style={{ fontSize: 14, color: '#666', marginBottom: 20, textAlign: 'center' }}>How long do you want to pin this conversation?</Text>
+
+            <TouchableOpacity onPress={() => { setPinModalVisible(false); applyPin(activeChatId as string, 1); }} style={styles.pinOptionBtn}><Text style={styles.pinOptionText}>24 Hours</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => { setPinModalVisible(false); applyPin(activeChatId as string, 7); }} style={styles.pinOptionBtn}><Text style={styles.pinOptionText}>7 Days</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => { setPinModalVisible(false); applyPin(activeChatId as string, 30); }} style={styles.pinOptionBtn}><Text style={styles.pinOptionText}>30 Days</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => setPinModalVisible(false)} style={{ paddingVertical: 12, alignItems: 'center', marginTop: 8 }}><Text style={{ fontSize: 16, color: '#FF3B30', fontWeight: 'bold' }}>Cancel</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    paddingTop: Platform.OS === 'ios' ? 60 : 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 20, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
   headerTitle: { fontSize: 22, fontWeight: 'bold', color: '#000' },
   selectModeBtn: { padding: 4 },
-
-  selectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 16,
-    paddingTop: Platform.OS === 'ios' ? 60 : 20,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  selHeaderBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#f0f0f0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  selHeaderTitle: { fontSize: 17, fontWeight: '700', color: '#000' },
-  selAllText: { fontSize: 14, fontWeight: '700', color: '#007AFF' },
-
-  searchSection: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f5f5f5',
-  },
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
+  tabBtn: { flex: 1, paddingVertical: 12, borderBottomWidth: 2, borderColor: 'transparent', alignItems: 'center' },
+  tabBtnActive: { borderColor: '#000' },
+  tabText: { fontWeight: '600', color: '#888', fontSize: 15 },
+  tabTextActive: { fontWeight: 'bold', color: '#000' },
+  searchSection: { paddingHorizontal: 16, paddingVertical: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f5f5f5', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
   searchInput: { flex: 1, fontSize: 15, color: '#000' },
-
-  sectionLabel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: '#fafafa',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  sectionLabelText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#007AFF',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-
   listContent: { paddingBottom: 32 },
-  separator: { height: 1, backgroundColor: '#f5f5f5', marginLeft: 90 },
-
-  chatCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    backgroundColor: '#fff',
-  },
+  
+  chatCard: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
   chatCardSelected: { backgroundColor: '#EFF6FF' },
-
-  checkbox: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#ddd',
-    marginRight: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  checkboxSelected: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
-
   imageWrapper: { position: 'relative', marginRight: 14 },
-  itemThumb: { width: 58, height: 58, borderRadius: 12, backgroundColor: '#eee' },
-  avatarOverlay: {
-    position: 'absolute',
-    bottom: -5,
-    right: -5,
-    borderWidth: 2,
-    borderColor: '#fff',
-    borderRadius: 12,
-  },
+  itemThumb: { width: 58, height: 58, borderRadius: 12 },
+  itemThumbFallback: { backgroundColor: '#eee', justifyContent: 'center', alignItems: 'center' },
+  avatarOverlay: { position: 'absolute', bottom: -5, right: -5, borderWidth: 2, borderColor: '#fff', borderRadius: 12 },
   avatarMini: { width: 26, height: 26, borderRadius: 13 },
-  avatarMiniPlaceholder: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#111',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  avatarMiniPlaceholder: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center' },
   avatarMiniText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
-
   chatInfo: { flex: 1, paddingRight: 6 },
-  nameRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 2,
-  },
+  nameRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 },
   otherName: { fontSize: 15, fontWeight: '500', color: '#222', flex: 1 },
   otherNameBold: { fontWeight: '700', color: '#000' },
-  timeText: { fontSize: 11, color: '#aaa', marginLeft: 6 },
-  itemTitle: { fontSize: 13, color: '#888', marginBottom: 4 },
+  itemTitle: { fontSize: 13, color: '#888' },
   lastMessage: { fontSize: 13, color: '#aaa', flex: 1 },
   lastMessageBold: { color: '#333', fontWeight: '600' },
-  unreadBadge: {
-    backgroundColor: '#007AFF',
-    borderRadius: 12,
-    minWidth: 22,
-    height: 22,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 6,
-    marginLeft: 6,
-  },
+  unreadBadge: { backgroundColor: '#007AFF', borderRadius: 12, minWidth: 22, height: 22, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, marginLeft: 6 },
   unreadBadgeText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
-
-  quickActions: { flexDirection: 'column', gap: 8, marginLeft: 8 },
-  quickActionBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#f8f8f8',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
+  quickActionBtn: { padding: 4, marginLeft: 8 },
+  
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
-  emptyIconWrap: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: '#f5f5f5',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  emptyText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  emptySubText: { fontSize: 14, color: '#aaa', textAlign: 'center', lineHeight: 21 },
+  emptyIconWrap: { width: 96, height: 96, borderRadius: 48, backgroundColor: '#f5f5f5', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
+  emptyText: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 8, textAlign: 'center' },
+
+  bottomSheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  bottomSheetCard: { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: Platform.OS === 'ios' ? 40 : 24 },
+  sheetHandle: { width: 40, height: 5, backgroundColor: '#ddd', borderRadius: 3, alignSelf: 'center', marginBottom: 20 },
+  sheetTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
+  sheetAction: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#f5f5f5' },
+  sheetIconWrap: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  sheetActionText: { fontSize: 16, fontWeight: '600', color: '#222' },
+
+  modalOverlayCenter: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  modalCardCenter: { backgroundColor: '#fff', width: '100%', maxWidth: 340, borderRadius: 24, padding: 24, alignItems: 'center' },
+  modalIconWrap: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
+  modalTitleCenter: { fontSize: 20, fontWeight: 'bold', marginBottom: 8, textAlign: 'center' },
+  modalSubCenter: { fontSize: 14, color: '#666', textAlign: 'center', marginBottom: 20 },
+  modalInput: { width: '100%', backgroundColor: '#f5f5f5', borderWidth: 1, borderColor: '#eee', borderRadius: 12, padding: 14, fontSize: 16 },
+  modalCancelBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: '#f0f0f0', alignItems: 'center' },
+  modalCancelText: { fontSize: 16, fontWeight: '600', color: '#666' },
+  modalSaveBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: '#000', alignItems: 'center' },
+  modalSaveText: { fontSize: 16, fontWeight: 'bold', color: '#fff' },
+  pinOptionBtn: { width: '100%', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee', alignItems: 'center' },
+  pinOptionText: { fontSize: 16, color: '#007AFF', fontWeight: '600' }
 });

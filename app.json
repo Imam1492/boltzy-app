@@ -19,7 +19,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.imam_khan.boltzyapp"
     },
     "web": {
       "output": "static",
@@ -39,11 +40,21 @@
           }
         }
       ],
-      "expo-localization"
+      "expo-localization",
+      "expo-web-browser",
+      "expo-font",
+      "expo-image",
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "92722222-b5c1-477e-ab75-430b3970710d"
+      }
     }
   }
 }

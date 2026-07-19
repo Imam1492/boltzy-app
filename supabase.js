@@ -5,9 +5,9 @@ import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native'; 
 
-// Replace these with your actual keys from Supabase Settings > API
-const supabaseUrl = 'https://iujijbkuukjoqtixjdmy.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml1amlqYmt1dWtqb3F0aXhqZG15Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0MzcwNTYsImV4cCI6MjA5MDAxMzA1Nn0.YnB34z8lQtwBaRBe9CNvQpSTvUuc7jPeeq-JlwiBd1o';
+// ✨ Pulling securely from the .env file!
+const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
 // A no-op lock function that bypasses the Web Locks API entirely.
 // This prevents "Lock broken by another request with the 'steal' option" errors

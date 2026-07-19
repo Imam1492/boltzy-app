@@ -2,11 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { useLanguage } from '../context/LanguageContext';
+import ConfirmModal from '../components/ConfirmModal';
 
 import {
   ActivityIndicator, Animated, FlatList, StyleSheet, Text, TouchableOpacity,
   View, Image, Alert, TextInput, ScrollView, Modal, Platform,
-  KeyboardAvoidingView, useWindowDimensions,
+  KeyboardAvoidingView, useWindowDimensions,Linking,Share,
 } from 'react-native';
 import { supabase } from '../supabase';
 import { getCurrentUser } from '../utils/auth';
@@ -65,6 +66,21 @@ function resolveProfilePublicHandle(
   return '';
 }
 
+// ✨ SMART INITIALS ENGINE
+export const getInitials = (name?: string) => {
+  if (!name || typeof name !== 'string') return '?';
+  const cleanName = name.trim();
+  if (!cleanName) return '?';
+  const words = cleanName.split(/\s+/);
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase(); // First letter of first two words
+  } else {
+    const word = words[0];
+    if (word.length === 1) return word[0].toUpperCase();
+    return (word[0] + word[word.length - 1]).toUpperCase(); // First and last letter
+  }
+};
+
 const HOME_FEED_CACHE_TTL_MS = 30_000;
 const HOME_SAVED_CACHE_TTL_MS = 20_000;
 const HOME_LOCATION_CACHE_TTL_MS = 5 * 60_000;
@@ -81,7 +97,7 @@ export default function Home() {
   const { width } = useWindowDimensions();
   
   // ✨ ACTIVATE BOTH STATIC AND DYNAMIC TRANSLATORS ✨
-  const { t, translateUGC } = useLanguage(); 
+ const { lang, t, translateUGC } = useLanguage();
 
   // ── Core Data ──────────────────────────────
   const [listings, setListings]               = useState<any[]>([]);
@@ -90,10 +106,15 @@ export default function Home() {
   const [savedIds, setSavedIds]               = useState<string[]>([]);
   const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
 
-  // ── Basic Filters ──────────────────────────
+// ── Basic Filters ──────────────────────────
   const [searchQuery, setSearchQuery]         = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [filteredListings, setFilteredListings] = useState<any[]>([]);
+
+  // ✨ NEW: Geo-Location States (safely inside the component!)
+  const [searchRadius, setSearchRadius]       = useState(20); // Default 20km
+  const [userLat, setUserLat]                 = useState<number | null>(null);
+  const [userLng, setUserLng]                 = useState<number | null>(null);
 
   // ── Advanced Filter & Sort (NEW) ───────────
   const [isFilterModalVisible, setIsFilterModalVisible] = useState(false);
@@ -118,13 +139,27 @@ export default function Home() {
   const [userArea, setUserArea]               = useState('');
   const [userCity, setUserCity]               = useState('');
   const [userState, setUserState]             = useState('');
-  const [feedScopeLabel, setFeedScopeLabel]   = useState('Loading nearby ads...');
+const [feedScope, setFeedScope] = useState<{key: string, val: string} | null>(null);
 
   // ── Profile / Help ─────────────────────────
   const [isHelpVisible, setIsHelpVisible]     = useState(false);
   const [isProfileMenuVisible, setIsProfileMenuVisible] = useState(false);
   const [profileData, setProfileData]         = useState<any>(null);
   const [loadingProfile, setLoadingProfile]   = useState(false);
+  const [headerProfile, setHeaderProfile] = useState<any>(null);
+  const [headerImgError, setHeaderImgError] = useState(false);
+  const [modalImgError, setModalImgError] = useState(false);
+
+  // ✨ MODAL STATE ENGINE
+  const [confirmModalVisible, setConfirmModalVisible] = useState(false);
+  const [confirmModalConfig, setConfirmModalConfig] = useState({ title: '', message: '', isDestructive: false });
+  const [pendingConfirmAction, setPendingConfirmAction] = useState<{ action: () => void } | null>(null);
+
+  const triggerConfirm = (title: string, message: string, isDestructive: boolean, action: () => void) => {
+    setConfirmModalConfig({ title, message, isDestructive });
+    setPendingConfirmAction({ action });
+    setConfirmModalVisible(true);
+  };
 
   // ── Voice Search ───────────────────────────
   const [isListening, setIsListening]             = useState(false);
@@ -152,11 +187,24 @@ export default function Home() {
   // ─────────────────────────────────────────────
   //  EFFECTS
   // ─────────────────────────────────────────────
+// 1. THE FETCHER: Starts the GPS search when Auto is selected
   useEffect(() => {
-    if (activeLocation === 'Auto' && Platform.OS !== 'web') {
+    if (activeLocation === 'Auto') {
       void fetchSmartLocationRef.current();
     }
   }, [activeLocation]);
+
+  // 2. THE APPLIER: Re-filters whenever listings or location changes
+  useEffect(() => {
+    if (listings.length > 0) {
+      applyFilters(
+        searchQuery, selectedCategory, activeLocation, listings, 
+        userArea, userCity, userState, 
+        activeSort, activePriceMin, activePriceMax, activeCondition, activePostedWithin
+      );
+    }
+  }, [activeLocation, userCity, userArea, userState, listings]);
+  
 
   useFocusEffect(useCallback(() => {
     void fetchListingsRef.current();
@@ -166,10 +214,16 @@ export default function Home() {
   useFocusEffect(
     useCallback(() => {
       let user: any = null;
-      const initNotification = async () => {
+     const initNotification = async () => {
         const currentUser = await getCurrentUser();
         if (!currentUser) return;
         user = currentUser;
+
+        // ✨ NEW: Fetch the profile immediately for the header!
+        supabase.from('profiles').select('*').eq('id', user.id).single().then(({data}) => {
+          if (data) setHeaderProfile(data);
+        });
+
         await refreshUnreadCount(user.id);
         const channel = supabase.channel('unread_messages_count')
           .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
@@ -207,7 +261,7 @@ export default function Home() {
     setUnreadMessagesCount(count || 0);
   }
 
-  const fetchSavedItems = async (force = false) => {
+const fetchSavedItems = async (force = false) => {
     const user = await getCurrentUser();
     if (!user) return;
 
@@ -225,83 +279,82 @@ export default function Home() {
     }
   };
 
-  const fetchSmartLocation = async (force = false) => {
-    if (!force && homeLocationCache && Date.now() - homeLocationCache.fetchedAt < HOME_LOCATION_CACHE_TTL_MS) {
-      setUserArea(homeLocationCache.area);
-      setUserCity(homeLocationCache.city);
-      setUserState(homeLocationCache.state);
-      applyFilters(
-        searchQuery,
-        selectedCategory,
-        'Auto',
-        listings,
-        homeLocationCache.area,
-        homeLocationCache.city,
-        homeLocationCache.state,
-        activeSort,
-        activePriceMin,
-        activePriceMax,
-        activeCondition,
-        activePostedWithin,
-      );
-      return;
-    }
-
+const fetchSmartLocation = async (force = false) => {
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') { setActiveLocation('All India'); return; }
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const geocode = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
-      if (geocode.length > 0) {
-        const geo: any = geocode[0];
-        const area  = geo.district || geo.subregion || '';
-        const city  = geo.city || '';
-        const state = geo.region || '';
-        setUserArea(area); setUserCity(city); setUserState(state);
-        homeLocationCache = { fetchedAt: Date.now(), area, city, state };
-        applyFilters(searchQuery, selectedCategory, 'Auto', listings, area, city, state, activeSort, activePriceMin, activePriceMax, activeCondition, activePostedWithin);
+      // Clean async function
+      const getGps = async () => {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') throw new Error('denied');
+        let loc = await Location.getLastKnownPositionAsync({ maxAge: 60000 });
+        if (!loc) loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        const geocode = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+        if (geocode.length > 0) return (geocode[0].city || geocode[0].district || geocode[0].subregion);
+        throw new Error('no_geocode');
+      };
+
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject('timeout'), 3000));
+
+      let city: string | null = null;
+      try {
+        city = await Promise.race([getGps(), timeoutPromise]) as string;
+      } catch (err) {
+        console.log("GPS timed out or blocked. Using IP fallback...");
+        const res = await fetch('https://ipinfo.io/json');
+        const data = await res.json();
+        if (data.city) city = data.city;
       }
-    } catch { setActiveLocation('All India'); }
+
+      if (city) {
+        setActiveLocation(city);
+        setUserCity(city);
+      }
+    } catch (err) {
+      console.log('Smart Loc Error:', err);
+    }
   };
 
-  const fetchListings = async ({ force = false, pullToRefresh = false }: { force?: boolean; pullToRefresh?: boolean } = {}) => {
-    if (!force && homeListingsCache && Date.now() - homeListingsCache.fetchedAt < HOME_FEED_CACHE_TTL_MS) {
-      setListings(homeListingsCache.data);
-      applyFilters(
-        searchQuery,
-        selectedCategory,
-        activeLocation,
-        homeListingsCache.data,
-        userArea,
-        userCity,
-        userState,
-        activeSort,
-        activePriceMin,
-        activePriceMax,
-        activeCondition,
-        activePostedWithin,
-      );
-      setLoading(false);
-      return;
-    }
-
+const fetchListings = async ({ force = false, pullToRefresh = false }: { force?: boolean; pullToRefresh?: boolean } = {}) => {
     if (pullToRefresh) {
       setRefreshing(true);
     } else if (listings.length === 0) {
       setLoading(true);
     }
 
+    try {
+      
     const { data, error } = await supabase
-      .from('listings')
-      .select('id, title, price, location, description, category, condition, image_urls, created_at')
-      .eq('is_sold', false)
-      .order('created_at', { ascending: false });
+        .from('listings')
+        .select('*')
+        .eq('is_sold', false)
+        // ✨ THE FIX: Force null values to the bottom of the feed!
+        .order('is_premium', { ascending: false, nullsFirst: false }) 
+        .order('created_at', { ascending: false });
 
-    if (!error && data) {
-      homeListingsCache = { fetchedAt: Date.now(), data };
-      setListings(data);
-      applyFilters(searchQuery, selectedCategory, activeLocation, data, userArea, userCity, userState, activeSort, activePriceMin, activePriceMax, activeCondition, activePostedWithin);
+      if (error) throw error;
+      let finalData = data || [];
+
+      // Apply the Text Search Filter
+      if (searchQuery.trim().length > 0) {
+        const query = searchQuery.toLowerCase();
+        finalData = finalData.filter((item: any) => 
+          item.title?.toLowerCase().includes(query) || 
+          item.translations?.ur?.title?.toLowerCase().includes(query) ||
+          item.description?.toLowerCase().includes(query)
+        );
+      }
+
+      // Save the raw data and run your filter engine!
+      setListings(finalData);
+      try {
+        applyFilters(searchQuery, selectedCategory, activeLocation, finalData, userArea, userCity, userState, activeSort, activePriceMin, activePriceMax, activeCondition, activePostedWithin);
+      } catch (err: any) {
+        console.error("FILTER CRASH:", err);
+      }
+
+    } catch (err: any) {
+      console.error('Fetch error:', err);
     }
+    
     setLoading(false);
     setRefreshing(false);
   };
@@ -328,12 +381,12 @@ export default function Home() {
     // 1. Category
     if (category !== 'All') result = result.filter(i => i.category === category);
 
-    // 2. Text search
+   // 2. Text search
     const q = query.trim().toLowerCase();
     if (q) {
       result = result.filter(i =>
         i.title?.toLowerCase().includes(q) ||
-        i.location?.toLowerCase().includes(q) ||
+        // ✨ Removed the location text search so it ONLY looks for items!
         i.description?.toLowerCase().includes(q)
       );
     }
@@ -360,47 +413,70 @@ export default function Home() {
       result = result.filter(i => new Date(i.created_at).getTime() >= cutoff);
     }
 
-    // 6. Location
+   // 6. Location
+    setFeedScope(null); // Default to NO banner!
+
     if (locationSetting === 'All India') {
-      setFeedScopeLabel('Showing ads from All India');
+      // User explicitly wants All India. Show it, hide banner.
     } else if (locationSetting !== 'Auto') {
+      // User manually selected a specific city (e.g. 'Mumbai')
       const locFilter = result.filter(i => i.location?.toLowerCase().includes(locationSetting.toLowerCase()));
       if (locFilter.length > 0) {
-        result = locFilter;
-        setFeedScopeLabel(`Showing ads from ${locationSetting}`);
+        result = locFilter; // Found it! No banner needed.
       } else {
-        setFeedScopeLabel(`No ads in ${locationSetting}. Showing All India.`);
+        // Warning: City is empty, falling back to All India
+        setFeedScope({ key: 'scope_no_local', val: '' });
       }
     } else {
+      // 'Auto (My Location)' mode
+      let foundLocal = false;
       if (area) {
         const m = result.filter(i => i.location?.toLowerCase().includes(area.toLowerCase()));
-        if (m.length) { result = m; setFeedScopeLabel(`Showing ads near your area (${area})`); }
+        if (m.length) { result = m; foundLocal = true; }
         else if (city) {
           const m2 = result.filter(i => i.location?.toLowerCase().includes(city.toLowerCase()));
-          if (m2.length) { result = m2; setFeedScopeLabel(`Expanding search to your city (${city})`); }
+          if (m2.length) { result = m2; foundLocal = true; }
           else if (state) {
             const m3 = result.filter(i => i.location?.toLowerCase().includes(state.toLowerCase()));
-            if (m3.length) { result = m3; setFeedScopeLabel(`Expanding search to your state (${state})`); }
-            else setFeedScopeLabel('No local ads found. Showing All India.');
-          } else setFeedScopeLabel('No local ads found. Showing All India.');
-        } else setFeedScopeLabel('No local ads found. Showing All India.');
+            if (m3.length) { result = m3; foundLocal = true; }
+          }
+        }
       } else if (city) {
         const m = result.filter(i => i.location?.toLowerCase().includes(city.toLowerCase()));
-        if (m.length) { result = m; setFeedScopeLabel(`Expanding search to your city (${city})`); }
-        else setFeedScopeLabel('No local ads found. Showing All India.');
-      } else setFeedScopeLabel('No local ads found. Showing All India.');
+        if (m.length) { result = m; foundLocal = true; }
+      }
+
+      if (!foundLocal) {
+        // Warning: Could not find anything near GPS, falling back to All India
+        setFeedScope({ key: 'scope_no_local', val: '' });
+      }
     }
 
-    // 7. Sort
+  // 7. Sort
     switch (sort) {
-      case 'price_asc':  result.sort((a, b) => parseFloat(a.price) - parseFloat(b.price));       break;
-      case 'price_desc': result.sort((a, b) => parseFloat(b.price) - parseFloat(a.price));       break;
-      case 'oldest':     result.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()); break;
-      default:           result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()); break;
-    }
+      case 'price_asc':  
+        result.sort((a, b) => parseFloat(a.price) - parseFloat(b.price));       
+        break;
+      case 'price_desc': 
+        result.sort((a, b) => parseFloat(b.price) - parseFloat(a.price));       
+        break;
+      case 'oldest':     
+        result.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()); 
+        break;
+      default:           
+        // ✨ MONETIZATION MAGIC: Premium always floats to the top of the default feed!
+        result.sort((a, b) => {
+          if (a.is_premium && !b.is_premium) return -1; // Put 'a' first
+          if (!a.is_premium && b.is_premium) return 1;  // Put 'b' first
+          // If both are premium (or neither are), sort normally by newest date
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        }); 
+        break;
+    };
 
     setFilteredListings(result);
   };
+
 
   // ─────────────────────────────────────────────
   //  FILTER MODAL ACTIONS
@@ -564,39 +640,105 @@ export default function Home() {
     ).start();
   };
 
-  const openProfileModal = async () => {
+ const openProfileModal = async () => {
     setIsProfileMenuVisible(true);
     setLoadingProfile(true);
     const user = await getCurrentUser();
     if (user) {
       const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
-      setProfileData({ email: user.email, phone: user.phone, name: data?.display_name || '', username: data?.username || '', avatar_url: data?.avatar_url || '' });
+      
+   setProfileData({ 
+        email: user.email, 
+        phone: user.phone, 
+        name: data?.real_name || '',         
+        username: data?.display_name || '',  
+        avatar_url: data?.avatar_url || '' 
+      });
     }
     setLoadingProfile(false);
   };
 
-  const handleLogout = async () => {
+const handleLogout = () => {
     setIsProfileMenuVisible(false);
-    if (Platform.OS === 'web') {
-      if (window.confirm('Are you sure you want to logout of Boltzy?')) {
-        await supabase.auth.signOut(); router.replace('/');
-      }
+    triggerConfirm('Logout', 'Are you sure you want to logout of Boltzy?', true, async () => { 
+      await supabase.auth.signOut(); 
+      router.replace('/'); 
+    });
+  };
+
+// ✨ NEW: Email & Phone Update States
+  const [isEmailModalVisible, setIsEmailModalVisible] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
+  
+  const [isPhoneModalVisible, setIsPhoneModalVisible] = useState(false);
+  const [newPhone, setNewPhone] = useState('');
+
+  // ✨ NEW: Zero-Cost Phone Update
+  const handleUpdatePhone = async () => {
+    if (!newPhone.trim() || newPhone.length < 10) {
+      if (Platform.OS === 'web') window.alert('Please enter a valid phone number.');
+      else Alert.alert('Invalid Number', 'Please enter a valid phone number.');
+      return;
+    }
+    
+    const user = await getCurrentUser();
+    if (!user) return;
+
+    // Saves directly to their public profile without triggering expensive SMS OTPs
+    const { error } = await supabase.from('profiles').update({ phone: newPhone }).eq('id', user.id);
+    
+    if (error) {
+      if (Platform.OS === 'web') window.alert(error.message);
+      else Alert.alert('Error', error.message);
     } else {
-      Alert.alert('Logout','Are you sure you want to logout of Boltzy?',[
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Logout', style: 'destructive', onPress: async () => { await supabase.auth.signOut(); router.replace('/'); } },
-      ]);
+      setProfileData((prev: any) => ({ ...prev, phone: newPhone }));
+      setIsPhoneModalVisible(false);
+      setNewPhone('');
+      if (Platform.OS === 'web') window.alert('Phone number added successfully!');
+      else Alert.alert('Success', 'Phone number added successfully!');
     }
   };
 
-  const handleDeleteAccount = () => {
-    if (Platform.OS === 'web') {
-      if (window.confirm('Permanently delete your account? This cannot be undone.')) executeDelete();
-    } else {
-      Alert.alert('Delete Account','Permanently delete your account? This cannot be undone.',[
-        { text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: executeDelete },
-      ]);
+// ✨ NEW: Logout from ALL devices
+  const handleLogoutAllDevices = () => {
+    setIsProfileMenuVisible(false);
+    triggerConfirm('Logout All Devices', 'Are you sure you want to log out from every device you are currently logged into?', true, async () => { 
+      await supabase.auth.signOut({ scope: 'global' }); 
+      router.replace('/'); 
+    });
+  };
+
+  // ✨ NEW: Secure Email Update
+  const handleUpdateEmail = async () => {
+    if (!newEmail.trim() || !newEmail.includes('@')) {
+      if (Platform.OS === 'web') window.alert('Please enter a valid email.');
+      else Alert.alert('Invalid Email', 'Please enter a valid email.');
+      return;
     }
+    
+    // Supabase will automatically send a verification link to the new email
+    const { error } = await supabase.auth.updateUser({ email: newEmail });
+    
+    if (error) {
+      if (Platform.OS === 'web') window.alert(error.message);
+      else Alert.alert('Error', error.message);
+    } else {
+      const msg = 'A verification link has been sent to ' + newEmail + '. Please check your inbox.';
+      if (Platform.OS === 'web') window.alert(msg);
+      else Alert.alert('Check Your Inbox', msg);
+      setIsEmailModalVisible(false);
+      setNewEmail('');
+    }
+  };
+
+const handleDeleteAccount = () => {
+    setIsProfileMenuVisible(false);
+    triggerConfirm(
+      'Delete Account', 
+      'Your account will be deactivated. You can log back in within 30 days to recover your account and data before it is permanently deleted.', 
+      true, 
+      executeDelete
+    );
   };
 
   const executeDelete = async () => {
@@ -667,15 +809,37 @@ export default function Home() {
 
   const renderItem = ({ item }: { item: any }) => {
     const imageUrl = item.image_urls?.length > 0 ? item.image_urls[0] : null;
-    return (
+    
+    // ✨ THE MAGIC FIX: Read from the cloud 'translations' JSON column first!
+    const displayTitle = item.translations?.[lang]?.title || translateUGC(item.title);
+    const displayLocation = item.translations?.[lang]?.location || translateUGC(item.location);
+    const displayCondition = item.condition 
+      ? (item.translations?.[lang]?.condition || translateUGC(item.condition)) 
+      : null;
+
+return (
       <TouchableOpacity
-        style={[styles.card, numColumns > 1 && { flex: 1, maxWidth: `${100 / numColumns}%` as any }]}
+        // ✨ Add the gold border style if premium
+        style={[
+          styles.card, 
+          numColumns > 1 && { flex: 1, maxWidth: `${100 / numColumns}%` as any },
+          item.is_premium && { borderColor: '#F5A623', borderWidth: 2, backgroundColor: '#fffdf5' }
+        ]}
         onPress={() => router.push(('/listing/' + item.id) as any)}
       >
         {imageUrl
           ? <Image source={{ uri: imageUrl }} style={styles.imagePlaceholder} />
           : <View style={styles.imagePlaceholder} />
         }
+        
+        {/* ✨ THE PREMIUM BADGE ✨ */}
+        {item.is_premium && (
+          <View style={{ position: 'absolute', top: 8, left: 8, backgroundColor: '#F5A623', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Ionicons name="star" size={10} color="#fff" />
+            <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#fff' }}>{t('promoted')}</Text>
+          </View>
+        )}
+
         <View style={styles.cardContent}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <Text style={styles.price}>₹{item.price}</Text>
@@ -687,18 +851,18 @@ export default function Home() {
               />
             </TouchableOpacity>
           </View>
-          {/* ✨ TRANSLATE AD TITLE ✨ */}
-          <Text style={styles.title} numberOfLines={1}>{translateUGC(item.title)}</Text>
-          {item.condition && item.condition !== 'All' && (
+          
+          <Text style={styles.title} numberOfLines={1}>{displayTitle}</Text>
+          
+          {displayCondition && displayCondition !== 'All' && (
             <View style={styles.conditionBadge}>
-              {/* ✨ TRANSLATE CONDITION ✨ */}
-              <Text style={styles.conditionBadgeText}>{translateUGC(item.condition)}</Text>
+              <Text style={styles.conditionBadgeText}>{displayCondition}</Text>
             </View>
           )}
+          
           <View style={styles.locationRow}>
             <Ionicons name="location-outline" size={12} color="#666" />
-            {/* ✨ TRANSLATE LOCATION ✨ */}
-            <Text style={styles.location} numberOfLines={1}>{translateUGC(item.location)}</Text>
+            <Text style={styles.location} numberOfLines={1}>{displayLocation}</Text>
           </View>
         </View>
       </TouchableOpacity>
@@ -741,8 +905,15 @@ export default function Home() {
             <Ionicons name="settings-outline" size={28} color="#000" />
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={openProfileModal}>
-            <Ionicons name="person-circle-outline" size={28} color="#000" />
+     <TouchableOpacity onPress={openProfileModal} style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#e0e0e0', justifyContent: 'center', alignItems: 'center', overflow: 'hidden', borderWidth: 1, borderColor: '#ccc' }}>
+            {/* ✨ FIX: Detects broken image links and switches to initials! */}
+            {headerProfile?.avatar_url && !headerImgError ? (
+              <Image source={{ uri: headerProfile.avatar_url }} style={{ width: '100%', height: '100%' }} onError={() => setHeaderImgError(true)} />
+            ) : (
+              <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#333' }}>
+                {getInitials(headerProfile?.real_name || headerProfile?.display_name || 'User')}
+              </Text>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -752,8 +923,13 @@ export default function Home() {
         <TouchableOpacity style={styles.locationSelectorBtn} onPress={() => setIsLocationModalVisible(true)}>
           <Ionicons name="location" size={20} color="#000" />
           {/* ✨ TRANSLATE ACTIVE LOCATION ✨ */}
-          <Text style={styles.locationSelectorText} numberOfLines={1}>
-            {translateUGC(activeLocation === 'Auto' ? (userArea || userCity || 'Auto (My Location)') : activeLocation)}
+         <Text style={styles.locationSelectorText} numberOfLines={1}>
+            {activeLocation === 'Auto' 
+              ? (userArea || userCity || t('auto_loc')) 
+              : activeLocation === 'All India' 
+                ? t('all_india') 
+                : translateUGC(activeLocation)
+            }
           </Text>
           <Ionicons name="chevron-down" size={16} color="#666" />
         </TouchableOpacity>
@@ -835,20 +1011,24 @@ export default function Home() {
       {/* ── ACTIVE FILTER CHIPS ───────────────── */}
       <ActiveChips />
 
-      {/* ── FEED SCOPE BANNER ─────────────────── */}
-      {!loading && filteredListings.length > 0 && (
+    {/* ── FEED SCOPE BANNER ─────────────────── */}
+      {!loading && filteredListings.length > 0 && feedScope && (
         <View style={styles.scopeBanner}>
           <Ionicons name="information-circle-outline" size={14} color="#666" />
-          {/* ✨ TRANSLATE DYNAMIC SCOPE BANNER ✨ */}
-          <Text style={styles.scopeText}>{translateUGC(feedScopeLabel)}</Text>
+          <Text style={styles.scopeText}>
+            {feedScope.key === 'scope_showing_near' 
+              ? `${t('scope_showing_near')} ${translateUGC(feedScope.val)}`
+              : t(feedScope.key)}
+          </Text>
           {activeFilterCount > 0 && (
-            <Text style={styles.scopeFilterNote}> · {filteredListings.length} results</Text>
+            <Text style={styles.scopeFilterNote}> · {filteredListings.length} {t('results')}</Text>
           )}
         </View>
       )}
 
       {/* ── FEED ──────────────────────────────── */}
-      {loading ? (
+      {/* ✨ FIX: Will not hide the spinner until the Auto Location finishes! */}
+      {loading || (activeLocation === 'Auto' && !userCity) ? (
         <ActivityIndicator size="large" color="#000" style={{ marginTop: 50 }} />
       ) : filteredListings.length === 0 ? (
         <View style={styles.emptyState}>
@@ -1021,7 +1201,10 @@ export default function Home() {
                             onPress={() => { setStagedPriceMin(mn); setStagedPriceMax(mx); }}
                           >
                             {/* ✨ TRANSLATE PRESET CHIPS ✨ */}
-                            <Text style={[styles.presetChipText, stagedPriceMin === mn && stagedPriceMax === mx && styles.presetChipTextActive]}>{translateUGC(label)}</Text>
+                           {/* ✨ NEW: Wrap with static t() translator */}
+<Text style={[styles.presetChipText, stagedPriceMin === mn && stagedPriceMax === mx && styles.presetChipTextActive]}>
+  {t(label)}
+</Text>
                           </TouchableOpacity>
                         ))}
                       </View>
@@ -1038,8 +1221,10 @@ export default function Home() {
                           style={[styles.conditionChip, stagedCondition === c && styles.conditionChipActive]}
                           onPress={() => setStagedCondition(c)}
                         >
-                          {/* ✨ TRANSLATE CONDITIONS ✨ */}
-                          <Text style={[styles.conditionChipText, stagedCondition === c && styles.conditionChipTextActive]}>{translateUGC(c)}</Text>
+                          {/* ✨ NEW: Use static t() translator */}
+<Text style={[styles.conditionChipText, stagedCondition === c && styles.conditionChipTextActive]}>
+  {t(c)}
+</Text>
                         </TouchableOpacity>
                       ))}
                     </View>
@@ -1054,8 +1239,10 @@ export default function Home() {
                         style={[styles.postedRow, stagedPostedWithin === pw && styles.postedRowActive]}
                         onPress={() => setStagedPostedWithin(pw)}
                       >
-                        {/* ✨ TRANSLATE POSTED WITHIN OPTIONS ✨ */}
-                        <Text style={[styles.postedLabel, stagedPostedWithin === pw && styles.postedLabelActive]}>{translateUGC(pw)}</Text>
+                       {/* ✨ NEW: Use static t() translator */}
+<Text style={[styles.postedLabel, stagedPostedWithin === pw && styles.postedLabelActive]}>
+  {t(pw)}
+</Text>
                         {stagedPostedWithin === pw
                           ? <Ionicons name="checkmark-circle" size={22} color="#007AFF" />
                           : <View style={styles.radioUnchecked} />
@@ -1084,15 +1271,14 @@ export default function Home() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* ════════════════════════════════════════
+{/* ════════════════════════════════════════
           PROFILE MODAL 
       ════════════════════════════════════════ */}
       <Modal visible={isProfileMenuVisible} transparent animationType="fade">
         <TouchableOpacity style={styles.fullScreenModalOverlay} activeOpacity={1} onPress={() => setIsProfileMenuVisible(false)}>
           <TouchableOpacity activeOpacity={1} style={styles.fullProfileCard}>
             <View style={styles.profileModalHeader}>
-              {/* ✨ TRANSLATE ACC DETAILS ✨ */}
-              <Text style={styles.profileModalTitle}>{t('acc_details')}</Text>
+              <Text style={styles.profileModalTitle}>{t('acc_details') || 'Account Details'}</Text>
               <TouchableOpacity onPress={() => setIsProfileMenuVisible(false)}>
                 <Ionicons name="close" size={28} color="#000" />
               </TouchableOpacity>
@@ -1101,52 +1287,77 @@ export default function Home() {
               <ActivityIndicator size="large" color="#000" style={{ marginTop: 50 }} />
             ) : (
               <ScrollView contentContainerStyle={{ alignItems: 'center', paddingBottom: 20 }} showsVerticalScrollIndicator={false}>
-                <View style={styles.profileAvatarLarge}>
-                  {profileData?.avatar_url
-                    ? <Image source={{ uri: profileData.avatar_url }} style={styles.profileAvatarImage} />
-                    : <Text style={styles.profileAvatarTextLarge}>{profileData?.name ? profileData.name.charAt(0).toUpperCase() : 'U'}</Text>
+
+             <View style={styles.profileAvatarLarge}>
+                  {/* ✨ FIX: Same error-catcher for the large modal avatar! */}
+                  {profileData?.avatar_url && !modalImgError
+                    ? <Image source={{ uri: profileData.avatar_url }} style={styles.profileAvatarImage} onError={() => setModalImgError(true)} />
+                    : <Text style={styles.profileAvatarTextLarge}>
+                        {getInitials(profileData?.name || profileData?.username || 'User')}
+                      </Text>
                   }
                 </View>
-                {/* ✨ TRANSLATE FALLBACK NAME ✨ */}
-                <Text style={styles.profileModalName}>{profileData?.name || t('Setup your name')}</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 24 }}>
+                
+                <Text style={styles.profileModalName}>{translateUGC(profileData?.name) || t('Setup your name')}</Text>
+                
+               <View style={styles.profileUsernameRow}>
                   {(() => {
-                    const handle = resolveProfilePublicHandle(
-                      profileData?.username,
-                      profileData?.name,
-                      profileData?.phone,
-                    );
-                    return handle ? (
-                      <Text style={styles.profileModalUsername}>@{handle}</Text>
-                    ) : (
-                      <Text style={[styles.profileModalUsername, { color: '#999' }]}>{t('profile_no_username')}</Text>
-                    );
+                    const handle = resolveProfilePublicHandle(profileData?.username, profileData?.name, profileData?.phone);
+                    return handle ? <Text style={styles.profileModalUsernameText}>@{translateUGC(handle)}</Text> : <Text style={[styles.profileModalUsernameText, { color: '#999' }]}>{t('profile_no_username')}</Text>;
                   })()}
-                  <TouchableOpacity style={{ marginLeft: 8, padding: 4 }} onPress={() => { setIsProfileMenuVisible(false); router.push('/profile' as any); }}>
-                    <Ionicons name="pencil" size={16} color="#007AFF" />
+                  <TouchableOpacity style={styles.profileEditIconBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/profile' as any); }}>
+                    <Ionicons name="pencil" size={14} color="#007AFF" />
                   </TouchableOpacity>
                 </View>
+
                 <View style={styles.profileDetailsBox}>
+                  {/* ✨ EMAIL EDIT ROW ✨ */}
                   <View style={styles.profileDetailRow}>
-                    <Ionicons name="mail" size={20} color="#666" />
-                    <Text style={styles.profileDetailText}>{profileData?.email || t('profile_no_email')}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
+                      <Ionicons name="mail" size={20} color="#666" />
+                      <Text style={styles.profileDetailText}>{profileData?.email || t('profile_no_email') || 'No Email Added'}</Text>
+                    </View>
+                    <TouchableOpacity onPress={() => { setIsProfileMenuVisible(false); setIsEmailModalVisible(true); }} style={{ backgroundColor: '#f0f0f0', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 }}>
+                    <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#007AFF' }}>{profileData?.email ? t('edit') : t('add')}</Text>  
+                    </TouchableOpacity>
                   </View>
-                  <View style={styles.profileDetailRow}>
-                    <Ionicons name="call" size={20} color="#666" />
-                    <Text style={styles.profileDetailText}>{profileData?.phone || t('profile_no_phone')}</Text>
+                 <View style={styles.profileDetailRow}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
+                      <Ionicons name="call" size={20} color="#666" />
+                      <Text style={styles.profileDetailText}>{profileData?.phone || t('profile_no_phone') || 'No phone number'}</Text>
+                    </View>
+                    {/* ✨ ADD/EDIT PHONE BUTTON */}
+                    <TouchableOpacity onPress={() => { setIsProfileMenuVisible(false); setIsPhoneModalVisible(true); }} style={{ backgroundColor: '#f0f0f0', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 }}>
+                      <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#007AFF' }}>{profileData?.phone ? t('edit') || 'Edit' : t('add') || 'Add'}</Text>  
+                    </TouchableOpacity>
                   </View>
                 </View>
+
                 <View style={styles.profileActionDivider} />
-                <TouchableOpacity style={styles.profileActionBtn} onPress={handleLogout}>
-                  <View style={styles.profileActionIconWrap}><Ionicons name="log-out" size={22} color="#000" /></View>
-                  {/* ✨ TRANSLATE LOGOUT ✨ */}
-                  <Text style={styles.profileActionText}>{t('logout')}</Text>
+
+                {/* ✨ BILLING AREA ✨ */}
+                <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/billing' as any); }}>
+                  <View style={styles.profileActionIconWrap}><Ionicons name="card" size={22} color="#000" /></View>
+                  <Text style={styles.profileActionText}>{t('billing_sub')}</Text>
                   <Ionicons name="chevron-forward" size={20} color="#ccc" style={{ marginLeft: 'auto' }} />
                 </TouchableOpacity>
+
+                <TouchableOpacity style={styles.profileActionBtn} onPress={handleLogout}>
+                  <View style={styles.profileActionIconWrap}><Ionicons name="log-out" size={22} color="#000" /></View>
+                  <Text style={styles.profileActionText}>{t('logout') || 'Logout'}</Text>
+                  <Ionicons name="chevron-forward" size={20} color="#ccc" style={{ marginLeft: 'auto' }} />
+                </TouchableOpacity>
+
+                {/* ✨ GLOBAL LOGOUT ✨ */}
+                <TouchableOpacity style={styles.profileActionBtn} onPress={handleLogoutAllDevices}>
+                  <View style={styles.profileActionIconWrap}><Ionicons name="desktop-outline" size={22} color="#000" /></View>
+                  <Text style={styles.profileActionText}>{t('logout_all')}</Text>
+                  <Ionicons name="chevron-forward" size={20} color="#ccc" style={{ marginLeft: 'auto' }} />
+                </TouchableOpacity>
+
                 <TouchableOpacity style={styles.profileActionBtnDanger} onPress={handleDeleteAccount}>
                   <View style={[styles.profileActionIconWrap, { backgroundColor: '#ffebee' }]}><Ionicons name="trash" size={22} color="#FF3B30" /></View>
-                  {/* ✨ TRANSLATE DELETE ACC ✨ */}
-                  <Text style={styles.profileActionTextDanger}>{t('delete_acc')}</Text>
+                  <Text style={styles.profileActionTextDanger}>{t('delete_acc') || 'Delete Account'}</Text>
                   <Ionicons name="chevron-forward" size={20} color="#ccc" style={{ marginLeft: 'auto' }} />
                 </TouchableOpacity>
               </ScrollView>
@@ -1192,7 +1403,7 @@ export default function Home() {
       {city === 'Auto (My Location)' && <Ionicons name="locate" size={14} color="#007AFF" style={{ marginRight: 4 }} />}
       {/* ✨ OLD: {translateUGC(city)} ---> NEW: {t(city)} ✨ */}
       <Text style={[styles.quickCityText, city === 'Auto (My Location)' && { color: '#007AFF', fontWeight: 'bold' }]}>
-        {t(city)}
+        {city === 'All India' ? t('all_india') : city === 'Auto (My Location)' ? t('auto_loc') : t(city)}
       </Text>
     </TouchableOpacity>
   ))}
@@ -1201,32 +1412,133 @@ export default function Home() {
         </KeyboardAvoidingView>
       </Modal>
 
+{/* ════════════════════════════════════════
+          EMAIL UPDATE MODAL 
+      ════════════════════════════════════════ */}
+      <Modal visible={isEmailModalVisible} transparent animationType="fade">
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <View style={styles.helpMenuCard}>
+            <View style={styles.helpHeader}>
+              <Text style={styles.helpTitle}>Update Email</Text>
+              <TouchableOpacity onPress={() => setIsEmailModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#000" />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 14, color: '#666', marginBottom: 16 }}>
+              Enter your new email address. We will send a verification link to confirm the change.
+            </Text>
+            <TextInput
+              style={{ backgroundColor: '#f5f5f5', borderRadius: 12, padding: 14, marginBottom: 20, fontSize: 16 }}
+              placeholder="Enter new email"
+              value={newEmail}
+              onChangeText={setNewEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+            <TouchableOpacity style={{ backgroundColor: '#000', padding: 16, borderRadius: 12, alignItems: 'center' }} onPress={handleUpdateEmail}>
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Send Verification</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       {/* ════════════════════════════════════════
+          PHONE UPDATE MODAL 
+      ════════════════════════════════════════ */}
+      <Modal visible={isPhoneModalVisible} transparent animationType="fade">
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <View style={styles.helpMenuCard}>
+            <View style={styles.helpHeader}>
+              <Text style={styles.helpTitle}>Add Phone Number</Text>
+              <TouchableOpacity onPress={() => setIsPhoneModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#000" />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 14, color: '#666', marginBottom: 16 }}>
+              Add a contact number so buyers and sellers can easily reach you regarding your listings.
+            </Text>
+            <TextInput
+              style={{ backgroundColor: '#f5f5f5', borderRadius: 12, padding: 14, marginBottom: 20, fontSize: 16 }}
+              placeholder="e.g. 9876543210"
+              value={newPhone}
+              onChangeText={setNewPhone}
+              keyboardType="phone-pad"
+            />
+            <TouchableOpacity style={{ backgroundColor: '#000', padding: 16, borderRadius: 12, alignItems: 'center' }} onPress={handleUpdatePhone}>
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Save Number</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+{/* ════════════════════════════════════════
           HELP MODAL 
       ════════════════════════════════════════ */}
       <Modal visible={isHelpVisible} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setIsHelpVisible(false)}>
           <View style={styles.helpMenuCard}>
             <View style={styles.helpHeader}>
-              {/* ✨ TRANSLATE HELP TITLE ✨ */}
-              <Text style={styles.helpTitle}>{t('support')}</Text>
+              <Text style={styles.helpTitle}>{t('help_support') || 'Help & Support'}</Text>
               <TouchableOpacity onPress={() => setIsHelpVisible(false)}>
                 <Ionicons name="close" size={24} color="#000" />
               </TouchableOpacity>
             </View>
-            <TouchableOpacity style={styles.helpOption} onPress={() => { setIsHelpVisible(false); Alert.alert('Safety Tips','1. Never pay in advance.\n2. Meet in public places.\n3. Inspect items before buying.'); }}>
+
+            <TouchableOpacity style={styles.helpOption} onPress={() => { 
+              setIsHelpVisible(false); 
+              const msg = '1. Never pay in advance.\n2. Meet in public places.\n3. Inspect items before buying.';
+              setTimeout(() => {
+                if (Platform.OS === 'web') window.alert(msg); else Alert.alert('Safety Tips', msg);
+              }, 100);
+            }}>
               <View style={[styles.helpIconCircle, { backgroundColor: '#4CAF50' }]}><Ionicons name="shield-checkmark" size={20} color="#fff" /></View>
-              {/* ✨ TRANSLATE SAFETY TIPS ✨ */}
-              <Text style={styles.helpOptionText}>{t('safety_tips')}</Text>
+              <Text style={styles.helpOptionText}>{t('safety_tips') || 'Safety Tips'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.helpOption} onPress={() => { setIsHelpVisible(false); Alert.alert('Contact Support','Email us at support@boltzy.in for any disputes or account issues.'); }}>
+
+            <TouchableOpacity style={styles.helpOption} onPress={() => { 
+              setIsHelpVisible(false); Linking.openURL('mailto:support@boltzy.in?subject=Boltzy Support Request');
+            }}>
               <View style={[styles.helpIconCircle, { backgroundColor: '#2196F3' }]}><Ionicons name="mail" size={20} color="#fff" /></View>
-              {/* ✨ TRANSLATE EMAIL SUPPORT ✨ */}
-              <Text style={styles.helpOptionText}>{t('email_support')}</Text>
+              <Text style={styles.helpOptionText}>{t('email_support') || 'Email Support'}</Text>
             </TouchableOpacity>
+
+            {/* ✨ RATE US ✨ */}
+            <TouchableOpacity style={styles.helpOption} onPress={() => { 
+              setIsHelpVisible(false); 
+              const appPackageId = 'com.boltzy.app'; // Replace with your actual Android Package ID later
+              if (Platform.OS === 'web') window.open(`https://play.google.com/store/apps/details?id=${appPackageId}`, '_blank');
+              else Linking.openURL(`market://details?id=${appPackageId}`).catch(() => Linking.openURL(`https://play.google.com/store/apps/details?id=${appPackageId}`));
+            }}>
+              <View style={[styles.helpIconCircle, { backgroundColor: '#FF9800' }]}><Ionicons name="star" size={20} color="#fff" /></View>
+              <Text style={styles.helpOptionText}>{t('rate_us') || 'Rate Us'}</Text>
+            </TouchableOpacity>
+
+            {/* ✨ INVITE FRIENDS ✨ */}
+            <TouchableOpacity style={[styles.helpOption, { borderBottomWidth: 0 }]} onPress={async () => { 
+              setIsHelpVisible(false); 
+              try {
+                await Share.share({ message: 'Hey! Join Boltzy to buy and sell awesome items locally. Download the app now: https://boltzy.in' });
+              } catch (e) { console.log(e); }
+            }}>
+              <View style={[styles.helpIconCircle, { backgroundColor: '#9C27B0' }]}><Ionicons name="person-add" size={20} color="#fff" /></View>
+              <Text style={styles.helpOptionText}>{t('invite_friends') || 'Invite Friends'}</Text>
+            </TouchableOpacity>
+            
           </View>
         </TouchableOpacity>
       </Modal>
+
+<ConfirmModal
+        visible={confirmModalVisible}
+        title={confirmModalConfig.title}
+        message={confirmModalConfig.message}
+        isDestructive={confirmModalConfig.isDestructive}
+        onConfirm={() => {
+          if (pendingConfirmAction) pendingConfirmAction.action();
+          setConfirmModalVisible(false);
+        }}
+        onCancel={() => setConfirmModalVisible(false)}
+      />
 
     </View>
   );
@@ -1414,6 +1726,9 @@ const styles = StyleSheet.create({
   profileAvatarImage:      { width: '100%', height: '100%', borderRadius: 50 },
   profileAvatarTextLarge:  { fontSize: 40, fontWeight: 'bold', color: '#666' },
   profileModalName:        { fontSize: 24, fontWeight: 'bold', color: '#000', marginBottom: 4, textAlign: 'center' },
+  profileUsernameRow:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 24, gap: 8 },
+  profileModalUsernameText:{ fontSize: 16, color: '#666', fontWeight: '500' },
+  profileEditIconBtn:      { backgroundColor: '#E8F0FE', padding: 8, borderRadius: 12 },
   profileModalUsername:    { fontSize: 16, color: '#666', marginBottom: 24, textAlign: 'center' },
   profileDetailsBox:       { width: '100%', backgroundColor: '#f9f9f9', borderRadius: 16, padding: 16, marginBottom: 24, borderWidth: 1, borderColor: '#eee' },
   profileDetailRow:        { flexDirection: 'row', alignItems: 'center', marginVertical: 8, gap: 12 },

@@ -5,8 +5,18 @@ import { initReactI18next } from 'react-i18next';
 import en from './locales/en.json';
 import hi from './locales/hi.json';
 import ur from './locales/ur.json';
+import bn from './locales/bn.json'; // Or wherever your translation files live
+import mr from './locales/mr.json';
+import te from './locales/te.json';
 
-export const supportedLanguages = ['en', 'hi', 'ur'] as const;
+export const supportedLanguages = [
+  'en',
+  'hi',
+  'ur',
+  'bn',
+  'mr',
+  'te',
+] as const;
 
 export type SupportedLanguage = (typeof supportedLanguages)[number];
 
@@ -14,6 +24,9 @@ const resources = {
   en: { translation: en },
   hi: { translation: hi },
   ur: { translation: ur },
+  bn: { translation: bn },
+  mr: { translation: mr },
+  te: { translation: te },
 } as const;
 
 export const normalizeLanguage = (language?: string | null): SupportedLanguage => {

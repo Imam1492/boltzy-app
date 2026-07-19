@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { supabase } from '../../supabase';
 import { getCurrentUser } from '../../utils/auth';
+import { useLanguage } from '../../context/LanguageContext'; // ✨ IMPORT TRANSLATOR
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const CARD_W = (SCREEN_W - 48) / 2; // 2-column grid with padding
@@ -27,14 +28,18 @@ const StarRow = ({ rating, size = 14, color = '#F5A623' }: { rating: number; siz
 );
 
 // ─── Review Card ──────────────────────────────────────────────────────────────
-const ReviewCard = ({ review }: { review: any }) => {
+// ✨ PASSED IN t and translateUGC AS PROPS
+const ReviewCard = ({ review, t, translateUGC, lang }: { review: any; t: any; translateUGC: any; lang: string }) => {
   const timeAgo = (d: string) => {
     const diff = Math.floor((Date.now() - new Date(d).getTime()) / 86400000);
-    if (diff === 0) return 'Today';
-    if (diff < 7)  return `${diff}d ago`;
-    if (diff < 30) return `${Math.floor(diff / 7)}w ago`;
-    return `${Math.floor(diff / 30)}mo ago`;
+    if (diff === 0) return t('Today') || 'Today';
+    if (diff < 7)  return `${diff} ${t('days ago') || 'd ago'}`;
+    if (diff < 30) return `${Math.floor(diff / 7)} ${t('weeks ago') || 'w ago'}`;
+    return `${Math.floor(diff / 30)} ${t('months ago') || 'mo ago'}`;
   };
+
+  const displayListingTitle = review.listing?.translations?.[lang]?.title || translateUGC(review.listing?.title);
+
   return (
     <View style={s.reviewCard}>
       <View style={s.reviewHeader}>
@@ -45,7 +50,8 @@ const ReviewCard = ({ review }: { review: any }) => {
           }
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={s.reviewerName}>{review.reviewer?.display_name || 'Anonymous'}</Text>
+          {/* ✨ TRANSLATED BUYER NAME ✨ */}
+          <Text style={s.reviewerName}>{translateUGC(review.reviewer?.display_name) || t('unknown_seller')}</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 }}>
             <StarRow rating={review.rating} size={12} />
             <Text style={s.reviewTime}>{timeAgo(review.created_at)}</Text>
@@ -56,12 +62,12 @@ const ReviewCard = ({ review }: { review: any }) => {
         </View>
       </View>
       {review.review_text ? (
-        <Text style={s.reviewText}>{`"${review.review_text}"`}</Text>
+        <Text style={s.reviewText}>{`"${translateUGC(review.review_text)}"`}</Text>
       ) : null}
-      {review.listing?.title ? (
+      {displayListingTitle ? (
         <View style={s.reviewListingTag}>
           <Ionicons name="pricetag-outline" size={11} color="#888" />
-          <Text style={s.reviewListingTitle} numberOfLines={1}>re: {review.listing.title}</Text>
+          <Text style={s.reviewListingTitle} numberOfLines={1}>re: {displayListingTitle}</Text>
         </View>
       ) : null}
     </View>
@@ -73,6 +79,9 @@ export default function PublicProfile() {
   const { id: rawUserId } = useLocalSearchParams<{ id?: string | string[] }>();
   const userId = Array.isArray(rawUserId) ? rawUserId[0] : rawUserId;
   const router = useRouter();
+  
+  // ✨ INIT LANGUAGE HOOK ✨
+  const { lang, t, translateUGC } = useLanguage();
 
   const [profile, setProfile]       = useState<any>(null);
   const [stats, setStats]           = useState<{ avg_rating: number; review_count: number } | null>(null);
@@ -97,12 +106,12 @@ export default function PublicProfile() {
       .from('profiles').select('*').eq('id', userId).single();
     if (profileData) setProfile(profileData);
 
-    // Seller stats (view)
+    // Seller stats
     const { data: statsData } = await supabase
       .from('seller_stats').select('*').eq('seller_id', userId).single();
     if (statsData) setStats(statsData);
 
-    // Active listings
+    // Active listings (Select * fetches the translations column too!)
     const { data: listingsData } = await supabase
       .from('listings').select('*')
       .eq('seller_id', userId).eq('is_sold', false)
@@ -115,13 +124,13 @@ export default function PublicProfile() {
       .eq('seller_id', userId).eq('is_sold', true);
     setTotalSold(soldCount || 0);
 
-    // Reviews with reviewer profile + listing title
+    // Reviews (Pulling listing translations as well)
     const { data: reviewsData } = await supabase
       .from('reviews')
       .select(`
         *,
         reviewer:profiles!reviews_reviewer_id_fkey(display_name, avatar_url),
-        listing:listings(title)
+        listing:listings(title, translations)
       `)
       .eq('seller_id', userId)
       .order('created_at', { ascending: false });
@@ -137,11 +146,10 @@ export default function PublicProfile() {
   const handleMessage = async () => {
     if (!currentUserId) return router.push('/' as any);
     if (currentUserId === userId) return;
-    // Navigate to their most recent listing's chat — or open a generic DM
     const latestListing = listings[0];
 
     if (!latestListing) {
-      Alert.alert('No Active Listings', 'This seller does not have any active listings to chat about right now.');
+      Alert.alert(t('common_error') || 'Error', t('no_ads_yet_sub') || 'No active listings to chat about.');
       return;
     }
 
@@ -173,32 +181,38 @@ export default function PublicProfile() {
     } catch {}
   };
 
-  const memberSince = profile?.created_at
-    ? new Date(profile.created_at).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })
+  const memberSinceYear = profile?.created_at
+    ? new Date(profile.created_at).getFullYear().toString()
     : '—';
 
-  const renderListingCard = ({ item }: { item: any }) => (
-    <TouchableOpacity
-      style={s.listingCard}
-      onPress={() => router.push(`/listing/${item.id}` as any)}
-      activeOpacity={0.85}
-    >
-      {item.image_urls?.[0]
-        ? <Image source={{ uri: item.image_urls[0] }} style={s.listingImg} resizeMode="cover" />
-        : <View style={s.listingImgFallback}><Ionicons name="image-outline" size={32} color="#ccc" /></View>
-      }
-      <View style={s.listingCardBody}>
-        <Text style={s.listingCardPrice}>₹{Number(item.price).toLocaleString('en-IN')}</Text>
-        <Text style={s.listingCardTitle} numberOfLines={1}>{item.title}</Text>
-        {item.location && (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 4 }}>
-            <Ionicons name="location-outline" size={10} color="#aaa" />
-            <Text style={s.listingCardLoc} numberOfLines={1}>{item.location}</Text>
-          </View>
-        )}
-      </View>
-    </TouchableOpacity>
-  );
+  const renderListingCard = ({ item }: { item: any }) => {
+    // ✨ GRAB CLOUD TRANSLATIONS FIRST ✨
+    const displayTitle = item.translations?.[lang]?.title || translateUGC(item.title);
+    const displayLocation = item.translations?.[lang]?.location || translateUGC(item.location);
+
+    return (
+      <TouchableOpacity
+        style={s.listingCard}
+        onPress={() => router.push(`/listing/${item.id}` as any)}
+        activeOpacity={0.85}
+      >
+        {item.image_urls?.[0]
+          ? <Image source={{ uri: item.image_urls[0] }} style={s.listingImg} resizeMode="cover" />
+          : <View style={s.listingImgFallback}><Ionicons name="image-outline" size={32} color="#ccc" /></View>
+        }
+        <View style={s.listingCardBody}>
+          <Text style={s.listingCardPrice}>₹{Number(item.price).toLocaleString('en-IN')}</Text>
+          <Text style={s.listingCardTitle} numberOfLines={1}>{displayTitle}</Text>
+          {item.location && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 4 }}>
+              <Ionicons name="location-outline" size={10} color="#aaa" />
+              <Text style={s.listingCardLoc} numberOfLines={1}>{displayLocation}</Text>
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   if (loading) return (
     <View style={s.center}><ActivityIndicator size="large" color="#000" /></View>
@@ -220,7 +234,6 @@ export default function PublicProfile() {
 
         {/* ═══ HERO SECTION ══════════════════════════════ */}
         <View style={s.hero}>
-          {/* Back + Share */}
           <View style={s.heroNav}>
             <TouchableOpacity style={s.navBtn} onPress={() => router.back()}>
               <Ionicons name="arrow-back" size={22} color="#000" />
@@ -230,7 +243,6 @@ export default function PublicProfile() {
             </TouchableOpacity>
           </View>
 
-          {/* Avatar */}
           <View style={s.avatarWrap}>
             {profile.avatar_url
               ? <Image source={{ uri: profile.avatar_url }} style={s.avatarImg} />
@@ -238,73 +250,69 @@ export default function PublicProfile() {
                   <Text style={s.avatarLetter}>{profile.display_name?.[0]?.toUpperCase() ?? '?'}</Text>
                 </View>
             }
-            {/* Verified badge */}
             <View style={s.verifiedBadge}>
               <Ionicons name="shield-checkmark" size={14} color="#fff" />
             </View>
           </View>
 
-          {/* Name */}
-          <Text style={s.profileName}>{profile.display_name || 'Boltzy User'}</Text>
+          {/* ✨ TRANSLATED SELLER NAME ✨ */}
+          <Text style={s.profileName}>{translateUGC(profile.display_name) || t('unknown_seller')}</Text>
           <Text style={s.profileUsername}>@{profile.username || 'user'}</Text>
 
-          {/* Rating summary */}
           {reviewCount > 0 ? (
             <View style={s.ratingPill}>
               <Ionicons name="star" size={15} color="#F5A623" />
               <Text style={s.ratingPillText}>
-                {avgRating} · {reviewCount} review{reviewCount !== 1 ? 's' : ''}
+                {avgRating} · {reviewCount} {t('results') || 'reviews'}
               </Text>
             </View>
           ) : (
             <View style={s.newSellerPill}>
               <Ionicons name="sparkles-outline" size={14} color="#888" />
-              <Text style={s.newSellerText}>New seller</Text>
+              <Text style={s.newSellerText}>{t('new_seller_no_reviews') || 'New seller'}</Text>
             </View>
           )}
 
-          {/* Stats row */}
           <View style={s.statsRow}>
             <View style={s.statBox}>
               <Text style={s.statNum}>{listings.length}</Text>
-              <Text style={s.statLabel}>Active</Text>
+              <Text style={s.statLabel}>{t('active') || 'Active'}</Text>
             </View>
             <View style={s.statDivider} />
             <View style={s.statBox}>
               <Text style={s.statNum}>{totalSold}</Text>
-              <Text style={s.statLabel}>Sold</Text>
+              <Text style={s.statLabel}>{t('sold') || 'Sold'}</Text>
             </View>
             <View style={s.statDivider} />
             <View style={s.statBox}>
               <Text style={s.statNum}>{reviewCount}</Text>
-              <Text style={s.statLabel}>Reviews</Text>
+              <Text style={s.statLabel}>{t('results') || 'Reviews'}</Text>
             </View>
             <View style={s.statDivider} />
             <View style={s.statBox}>
-              <Text style={s.statNum}>{memberSince.split(' ')[1]}</Text>
-              <Text style={s.statLabel}>Since {memberSince.split(' ')[0]}</Text>
+              <Text style={s.statNum}>{memberSinceYear}</Text>
+              <Text style={s.statLabel}>{t('member_since')}</Text>
             </View>
           </View>
 
-          {/* CTA buttons */}
           {!isOwnProfile && (
             <View style={s.ctaRow}>
               <TouchableOpacity style={s.ctaChat} onPress={handleMessage}>
                 <Ionicons name="chatbubbles" size={18} color="#000" />
-                <Text style={s.ctaChatText}>Message</Text>
+                <Text style={s.ctaChatText}>{t('message') || 'Message'}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={s.ctaCall}
                 onPress={() => profile.phone ? Linking.openURL(`tel:${profile.phone}`) : null}
               >
                 <Ionicons name="call" size={18} color="#fff" />
-                <Text style={s.ctaCallText}>Call</Text>
+                <Text style={s.ctaCallText}>{t('call') || 'Call'}</Text>
               </TouchableOpacity>
             </View>
           )}
           {isOwnProfile && (
             <TouchableOpacity style={s.editProfileBtn} onPress={() => router.push('/profile' as any)}>
               <Ionicons name="create-outline" size={16} color="#000" />
-              <Text style={s.editProfileText}>Edit Profile</Text>
+              <Text style={s.editProfileText}>{t('my_ads_edit') || 'Edit Profile'}</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -317,7 +325,7 @@ export default function PublicProfile() {
           >
             <Ionicons name="grid-outline" size={16} color={activeTab === 'listings' ? '#000' : '#aaa'} />
             <Text style={[s.tabText, activeTab === 'listings' && s.tabTextActive]}>
-              Listings ({listings.length})
+              {t('active_ads')} ({listings.length})
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -326,7 +334,7 @@ export default function PublicProfile() {
           >
             <Ionicons name="star-outline" size={16} color={activeTab === 'reviews' ? '#000' : '#aaa'} />
             <Text style={[s.tabText, activeTab === 'reviews' && s.tabTextActive]}>
-              Reviews ({reviewCount})
+              {t('user_reviews')} ({reviewCount})
             </Text>
           </TouchableOpacity>
         </View>
@@ -337,8 +345,8 @@ export default function PublicProfile() {
             {listings.length === 0 ? (
               <View style={s.emptyTab}>
                 <Ionicons name="cube-outline" size={52} color="#e0e0e0" />
-                <Text style={s.emptyTabTitle}>No active listings</Text>
-                <Text style={s.emptyTabSub}>This seller has no active ads right now.</Text>
+                <Text style={s.emptyTabTitle}>{t('no_ads_yet')}</Text>
+                <Text style={s.emptyTabSub}>{t('no_ads_yet_sub')}</Text>
               </View>
             ) : (
               <View style={s.gridWrap}>
@@ -355,13 +363,12 @@ export default function PublicProfile() {
         {/* ═══ REVIEWS TAB ═══════════════════════════════ */}
         {activeTab === 'reviews' && (
           <View style={s.tabContent}>
-            {/* Rating summary bar */}
             {reviewCount > 0 && (
               <View style={s.ratingOverview}>
                 <View style={s.ratingBigNum}>
                   <Text style={s.ratingBigText}>{avgRating}</Text>
                   <StarRow rating={avgRating} size={18} />
-                  <Text style={s.ratingTotalText}>{reviewCount} review{reviewCount !== 1 ? 's' : ''}</Text>
+                  <Text style={s.ratingTotalText}>{reviewCount} {t('results') || 'reviews'}</Text>
                 </View>
                 <View style={s.ratingBars}>
                   {[5, 4, 3, 2, 1].map((star) => {
@@ -385,13 +392,13 @@ export default function PublicProfile() {
             {reviews.length === 0 ? (
               <View style={s.emptyTab}>
                 <Ionicons name="star-outline" size={52} color="#e0e0e0" />
-                <Text style={s.emptyTabTitle}>No reviews yet</Text>
-                <Text style={s.emptyTabSub}>Be the first to leave a review after a purchase.</Text>
+                <Text style={s.emptyTabTitle}>{t('no_reviews_yet')}</Text>
+                <Text style={s.emptyTabSub}>{t('no_reviews_yet_sub')}</Text>
               </View>
             ) : (
               <View style={{ paddingHorizontal: 16, paddingBottom: 24 }}>
                 {reviews.map((review) => (
-                  <ReviewCard key={review.id} review={review} />
+                  <ReviewCard key={review.id} review={review} t={t} translateUGC={translateUGC} lang={lang} />
                 ))}
               </View>
             )}

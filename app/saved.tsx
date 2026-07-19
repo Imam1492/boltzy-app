@@ -4,9 +4,12 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View, Image, Alert } from 'react-native';
 import { supabase } from '../supabase';
 import { getCurrentUser } from '../utils/auth';
+import { useLanguage } from '../context/LanguageContext'; // ✨ IMPORT TRANSLATOR
 
 export default function SavedItems() {
   const router = useRouter();
+  const { t, translateUGC } = useLanguage(); // ✨ ACTIVATE TRANSLATOR
+
   const [savedListings, setSavedListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -47,7 +50,7 @@ export default function SavedItems() {
       .match({ user_id: user.id, listing_id: listingId });
 
     if (error) {
-      Alert.alert("Error", "Could not remove item.");
+      Alert.alert(t('common_error') || "Error", "Could not remove item.");
       fetchSavedListings(); // Rollback/Refresh if it failed
     }
   };
@@ -70,7 +73,8 @@ export default function SavedItems() {
           <View style={styles.cardHeader}>
             <View style={{ flex: 1 }}>
               <Text style={styles.price}>₹{item.price}</Text>
-              <Text style={styles.title} numberOfLines={1}>{item.title}</Text>
+              {/* ✨ TRANSLATE DYNAMIC AD TITLE ✨ */}
+              <Text style={styles.title} numberOfLines={1}>{translateUGC(item.title)}</Text>
             </View>
             
             {/* --- TRASH BUTTON --- */}
@@ -82,7 +86,8 @@ export default function SavedItems() {
             </TouchableOpacity>
           </View>
           
-          <Text style={styles.location}>{item.location}</Text>
+          {/* ✨ TRANSLATE DYNAMIC LOCATION ✨ */}
+          <Text style={styles.location}>{translateUGC(item.location)}</Text>
         </View>
       </TouchableOpacity>
     );
@@ -94,7 +99,8 @@ export default function SavedItems() {
         <TouchableOpacity onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={28} color="#000" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Saved Items</Text>
+        {/* ✨ TRANSLATE HEADER ✨ */}
+        <Text style={styles.headerTitle}>{t('saved_title')}</Text>
         <View style={{ width: 28 }} />
       </View>
 
@@ -103,9 +109,10 @@ export default function SavedItems() {
       ) : savedListings.length === 0 ? (
         <View style={styles.emptyState}>
           <Ionicons name="heart-outline" size={80} color="#ccc" />
-          <Text style={styles.emptyText}>No saved items yet.</Text>
-          <TouchableOpacity style={styles.browseBtn} onPress={() => router.push('/home')}>
-            <Text style={styles.browseBtnText}>Browse Listings</Text>
+          {/* ✨ TRANSLATE EMPTY STATE ✨ */}
+          <Text style={styles.emptyText}>{t('saved_empty')}</Text>
+          <TouchableOpacity style={styles.browseBtn} onPress={() => router.push('/home' as any)}>
+            <Text style={styles.browseBtnText}>{t('saved_browse')}</Text>
           </TouchableOpacity>
         </View>
       ) : (

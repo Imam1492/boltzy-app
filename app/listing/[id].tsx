@@ -1,13 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator, Alert, Dimensions, FlatList, Image, Linking,
   Platform, ScrollView, Share, StyleSheet, Text,
   TouchableOpacity, View, NativeScrollEvent, NativeSyntheticEvent,
 } from 'react-native';
 import { supabase } from '../../supabase';
-import { getCurrentUser } from '../../utils/auth';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -25,8 +24,7 @@ const StarRow = ({ rating, size = 14, color = '#F5A623' }: { rating: number; siz
 );
 
 export default function ListingDetails() {
-  const { id: rawListingId } = useLocalSearchParams<{ id?: string | string[] }>();
-  const listingId = Array.isArray(rawListingId) ? rawListingId[0] : rawListingId;
+  const { id } = useLocalSearchParams();
   const router  = useRouter();
 
   const [listing, setListing]             = useState<any>(null);
@@ -40,18 +38,16 @@ export default function ListingDetails() {
 
   const flatRef = useRef<FlatList>(null);
 
+  useEffect(() => { fetchData(); }, [id]);
+
   // ── Fetch ──────────────────────────────────────────────────────────────────
-  const fetchData = useCallback(async () => {
-    if (!listingId) {
-      setLoading(false);
-      return;
-    }
+  const fetchData = async () => {
     setLoading(true);
-    const user = await getCurrentUser();
+    const { data: { user } } = await supabase.auth.getUser();
     if (user) setCurrentUserId(user.id);
 
     const { data: listingData } = await supabase
-      .from('listings').select('*').eq('id', listingId).single();
+      .from('listings').select('*').eq('id', id).single();
 
     if (listingData) {
       setListing(listingData);
@@ -72,11 +68,7 @@ export default function ListingDetails() {
       }
     }
     setLoading(false);
-  }, [listingId]);
-
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+  };
 
   const timeAgo = (d: string) => {
     const diff = Math.floor((Date.now() - new Date(d).getTime()) / 86400000);
@@ -114,7 +106,7 @@ export default function ListingDetails() {
   };
 
   const submitReport = async (reason: string) => {
-    const user = await getCurrentUser();
+    const { data: { user } } = await supabase.auth.getUser();
     if (!user) return Alert.alert('Login Required', 'Please log in to report.');
     await supabase.from('reports').insert({ listing_id: listing.id, reporter_id: user.id, reason });
     Alert.alert('Reported ✓', 'Thank you. Our team will review this listing.');
@@ -131,7 +123,7 @@ export default function ListingDetails() {
   };
 
   const submitUserReport = async (reason: string) => {
-    const user = await getCurrentUser();
+    const { data: { user } } = await supabase.auth.getUser();
     if (!user) return Alert.alert('Login Required', 'Please log in to report.');
     const { error } = await supabase.rpc('report_user_engine', {
       p_reported_user_id: listing.seller_id,
@@ -162,7 +154,7 @@ export default function ListingDetails() {
       .eq('listing_id', listing.id)
       .eq('buyer_id', currentUserId)
       .eq('seller_id', listing.seller_id)
-      .maybeSingle();
+      .single();
 
     if (existingChat) {
       router.push(`/chat/${existingChat.id}` as any);
