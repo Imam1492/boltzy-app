@@ -2,14 +2,14 @@
   "name": "boltzy-app",
   "main": "expo-router/entry",
   "version": "1.0.0",
-"scripts": {
-  "start": "expo start",
-  "reset-project": "node ./scripts/reset-project.js",
-  "android": "expo start --android",
-  "ios": "expo start --ios",
-  "web": "expo start --web",
-  "lint": "expo lint"
-},
+  "scripts": {
+    "start": "expo start",
+    "reset-project": "node ./scripts/reset-project.js",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "lint": "expo lint"
+  },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
     "@hcaptcha/react-native-hcaptcha": "^4.0.0",
@@ -18,19 +18,24 @@
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
     "@supabase/supabase-js": "^2.108.2",
+    "aes-js": "^3.1.2",
     "base64-arraybuffer": "^1.0.2",
     "expo": "~56.0.16",
     "expo-constants": "^56.0.18",
     "expo-contacts": "~56.0.10",
-    "expo-dev-client": "~56.0.23",
+    "expo-crypto": "~56.0.4",
+    "expo-dev-client": "~56.0.24",
     "expo-font": "~56.0.7",
     "expo-haptics": "~56.0.3",
     "expo-image": "~56.0.11",
+    "expo-image-manipulator": "~56.0.22",
     "expo-image-picker": "~56.0.21",
     "expo-linking": "~56.0.15",
     "expo-localization": "~56.0.6",
     "expo-location": "~56.0.21",
     "expo-router": "~56.2.15",
+    "expo-secure-store": "~56.0.4",
+    "expo-speech-recognition": "^56.0.1",
     "expo-splash-screen": "~56.0.13",
     "expo-status-bar": "~56.0.4",
     "expo-symbols": "~56.0.6",
@@ -42,9 +47,10 @@
     "react-i18next": "^17.0.8",
     "react-native": "0.85.3",
     "react-native-gesture-handler": "~2.31.1",
+    "react-native-get-random-values": "^2.0.0",
     "react-native-maps": "1.27.2",
     "react-native-razorpay": "^3.0.0",
-    "react-native-reanimated": "~4.3.1",
+    "react-native-reanimated": "4.3.1",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "4.25.2",
     "react-native-toast-message": "^2.3.3",
@@ -57,6 +63,8 @@
     "@babel/plugin-transform-class-properties": "^7.29.7",
     "@babel/plugin-transform-classes": "^7.29.7",
     "@babel/plugin-transform-flow-strip-types": "^7.29.7",
+    "@types/aes-js": "^3.1.4",
+    "@types/hcaptcha__react-hcaptcha": "^0.1.8",
     "@types/react": "~19.2.14",
     "@types/react-native": "^0.72.8",
     "eslint": "^9.25.0",
@@ -64,5 +72,12 @@
     "supabase": "^2.98.2",
     "typescript": "~6.0.3"
   },
-  "private": true
+  "overrides": {
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "private": true,
+  "optionalDependencies": {
+    "lightningcss-win32-x64-msvc": "^1.33.0"
+  }
 }

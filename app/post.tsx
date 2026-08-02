@@ -1,9 +1,8 @@
-import React, { useState , useEffect } from 'react';
-
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView,
   Modal, ActivityIndicator, Platform, KeyboardAvoidingView,
-  Image, FlatList,
+  Image, FlatList, Alert, Animated, BackHandler,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -12,7 +11,9 @@ import { getCurrentUser } from '../utils/auth';
 import { useLanguage } from '../context/LanguageContext';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import Toast from 'react-native-toast-message'; // ✨ NEW: Import Toast
+import * as ImageManipulator from 'expo-image-manipulator';
+import Toast from 'react-native-toast-message';
+import { useTheme } from '../context/ThemeContext';
 
 function categoryI18nKey(cat: string): string {
   return `cat_${cat.replace(/\s+/g, '_')}`;
@@ -38,9 +39,21 @@ const HIGHLIGHT_SUGGESTION_KEYS: Record<string, string[]> = {
   default: ['post_sug_default_0', 'post_sug_default_1', 'post_sug_default_2', 'post_sug_default_3', 'post_sug_default_4', 'post_sug_default_5'],
 };
 
+const containsInappropriateContent = (text: string): boolean => {
+  const bannedWords = [
+    'fuck', 'shit', 'bitch', 'asshole', 'cunt', 
+    'nigger', 'faggot', 'kill', 'murder', 'rape',
+    'scam', 'fraud', 'fake', 'stolen'
+  ];
+  
+  const lowerText = text.toLowerCase();
+  return bannedWords.some(word => lowerText.includes(word));
+};
+
 export default function PostAd() {
   const router = useRouter();
   const { t } = useLanguage();
+  const { colors, isDark } = useTheme();
 
   const [title, setTitle]           = useState('');
   const [price, setPrice]           = useState('');
@@ -50,6 +63,7 @@ export default function PostAd() {
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
 
   const [category, setCategory]               = useState('');
+  const [customCategory, setCustomCategory]   = useState('');
   const [isCategoryModalVisible, setCategoryModalVisible] = useState(false);
   const [categorySearch, setCategorySearch]   = useState('');
 
@@ -58,6 +72,7 @@ export default function PostAd() {
   const [showLocSuggestions, setShowLocSuggestions] = useState(false);
 
   const [images, setImages]                   = useState<string[]>([]);
+  const [isProcessingImages, setIsProcessingImages] = useState(false); 
   const [isUploading, setIsUploading]         = useState(false);
 
   const [highlights, setHighlights]           = useState<string[]>([]);
@@ -69,6 +84,89 @@ export default function PostAd() {
   );
 
   const suggestionKeys = HIGHLIGHT_SUGGESTION_KEYS[category] || HIGHLIGHT_SUGGESTION_KEYS.default;
+
+  const Skeleton = ({ width, height, style, borderRadius = 8 }: { width?: any, height: any, style?: any, borderRadius?: number }) => {
+    const fadeAnim = useRef(new Animated.Value(0.5)).current;
+    
+    useEffect(() => {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+          Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
+        ])
+      ).start();
+    }, [fadeAnim]);
+
+    return (
+      <Animated.View 
+        style={[
+          { width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, 
+          style
+        ]} 
+      />
+    );
+  };
+
+  const saveAsDraft = async () => {
+    setIsUploading(true);
+    try {
+      const user = await getCurrentUser();
+      if (!user) return;
+
+      const uploadedUrls: string[] = [];
+      for (const uri of images) {
+        const response = await fetch(uri);
+        const blob = await response.blob();
+        const fileName = `draft_${Date.now()}_${Math.random().toString(36).substring(7)}.jpg`;
+        await supabase.storage.from('listing_images').upload(fileName, blob);
+        const { data: { publicUrl } } = supabase.storage.from('listing_images').getPublicUrl(fileName);
+        uploadedUrls.push(publicUrl);
+      }
+
+      await supabase.from('listings').insert({
+        seller_id: user.id,
+        title: title.trim() || 'Untitled Draft',
+        description: description.trim() || '',
+        price: parseFloat(price) || 0,
+        category: category || 'Other',
+        location: locationText || '',
+        image_urls: uploadedUrls,
+        approval_status: 'draft',
+        is_sold: false
+      });
+
+      Toast.show({ type: 'success', text1: 'Draft Saved', position: 'top' });
+      router.back();
+    } catch (e) {
+      Toast.show({ type: 'error', text1: 'Failed to save draft', position: 'top' });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleBackPress = useCallback(() => {
+    const hasInput = title.trim() || description.trim() || price || images.length > 0;
+    
+    if (hasInput && !isUploading) {
+      Alert.alert(
+        "Discard Ad?",
+        "You have unsaved changes. Would you like to save this as a draft to finish later?",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Discard", style: "destructive", onPress: () => router.back() },
+          { text: "Save Draft", onPress: saveAsDraft }
+        ]
+      );
+      return true; 
+    }
+    router.back();
+    return true;
+  }, [title, description, price, images, isUploading]);
+
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+    return () => backHandler.remove();
+  }, [handleBackPress]);
 
   const addHighlight = (text: string) => {
     const trimmed = text.trim();
@@ -97,11 +195,28 @@ export default function PostAd() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
       selectionLimit: 5,
-      quality: 0.7,
+      quality: 1, 
     });
+    
     if (!result.canceled) {
-      const newUris = result.assets.map(a => a.uri);
-      setImages(prev => [...prev, ...newUris].slice(0, 5));
+      setIsProcessingImages(true); 
+      try {
+        const processedUris: string[] = []; 
+        
+        for (const asset of result.assets) {
+          const compressedImage = await ImageManipulator.manipulateAsync(
+            asset.uri,
+            [{ resize: { width: 1080 } }], 
+            { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+          );
+          processedUris.push(compressedImage.uri);
+        }
+        setImages(prev => [...prev, ...processedUris].slice(0, 5));
+      } catch (error) {
+        Toast.show({ type: 'error', text1: 'Error', text2: 'Could not compress image.', position: 'top' });
+      } finally {
+        setIsProcessingImages(false);
+      }
     }
   };
 
@@ -136,7 +251,6 @@ export default function PostAd() {
       try {
         addr = await Promise.race([getGps(), timeoutPromise]) as string;
       } catch (err) {
-        console.log("GPS timed out, falling back to IP Location...");
         const res = await fetch('https://ipinfo.io/json');
         const data = await res.json();
         if (data.city && data.region) {
@@ -144,9 +258,8 @@ export default function PostAd() {
         }
       }
 
-   if (addr) {
+      if (addr) {
         setLocationText(addr);
-        // ✨ FIX: Instantly clear the red border when GPS finds the location!
         setMissingFields(prev => prev.filter(f => f !== 'location')); 
       }
     } catch (error) {
@@ -155,10 +268,7 @@ export default function PostAd() {
       setIsFetchingLocation(false);
     }
   };
-  
-  // ─────────────────────────────────────────────────────────────────────────
-  //  ✨ UPGRADED: AI MAGIC DESCRIPTION WITH RATE LIMITING
-  // ─────────────────────────────────────────────────────────────────────────
+
   const generateAIDescription = async () => {
     if (!title.trim() || !category) {
       Toast.show({ type: 'error', text1: 'Hold up!', text2: "Please enter a Title and select a Category first.", position: 'top' });
@@ -170,11 +280,9 @@ export default function PostAd() {
       const user = await getCurrentUser();
       if (!user) throw new Error(t('post_login_required') || 'Login required');
 
-      // 🛑 AI BOUNCER CHECKS 🛑
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-      // Check Daily Limit (Max 10)
       const { count: dailyCount } = await supabase.from('ai_usage_logs')
         .select('*', { count: 'exact', head: true })
         .eq('user_id', user.id).gte('created_at', oneDayAgo);
@@ -184,7 +292,6 @@ export default function PostAd() {
         return;
       }
 
-      // Check Hourly Limit (Max 3)
       const { count: hourlyCount } = await supabase.from('ai_usage_logs')
         .select('*', { count: 'exact', head: true })
         .eq('user_id', user.id).gte('created_at', oneHourAgo);
@@ -194,19 +301,15 @@ export default function PostAd() {
         return;
       }
 
-      // 🧠 Call the AI
       const { data, error } = await supabase.functions.invoke('generate-ad', { body: { title, category } });
 
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      // 📝 Log successful usage to the database
       await supabase.from('ai_usage_logs').insert({ user_id: user.id });
 
-      // Apply data
       if (data?.description) {
         setDescription(data.description);
-        // ✨ FIX: Clear red box when AI fills it in!
         setMissingFields(prev => prev.filter(f => f !== 'description'));
       }
       if (data?.highlights) {
@@ -222,17 +325,13 @@ export default function PostAd() {
     }
   };
 
-// ─────────────────────────────────────────────────────────────────────────
-  //  ✨ UPGRADED: POST AD WITH DYNAMIC FIELD VALIDATION
-  // ─────────────────────────────────────────────────────────────────────────
   const handlePostAd = async () => {
-    let localMissing = [];
+    let localMissing: string[] = [];
     
-    // ✨ NEW: Added validation for Images!
     if (images.length === 0) localMissing.push('images');
-    
     if (!title.trim()) localMissing.push('title');
     if (!category) localMissing.push('category');
+    if (category === 'Other' && !customCategory.trim()) localMissing.push('customCategory');
     if (!price) localMissing.push('price');
     if (!locationText.trim()) localMissing.push('location'); 
     if (!description.trim()) localMissing.push('description');
@@ -240,15 +339,8 @@ export default function PostAd() {
     setMissingFields(localMissing);
 
     if (localMissing.length > 0) {
-      // ✨ NEW: Capitalize and join the missing fields into a clear sentence
       const missingList = localMissing.map(f => f.charAt(0).toUpperCase() + f.slice(1)).join(', ');
-      
-      Toast.show({ 
-        type: 'error', 
-        text1: 'Missing Information', 
-        text2: `Please add: ${missingList}`, 
-        position: 'top' 
-      });
+      Toast.show({ type: 'error', text1: 'Missing Information', text2: `Please add: ${missingList}`, position: 'top' });
       return;
     }
 
@@ -257,21 +349,8 @@ export default function PostAd() {
       const user = await getCurrentUser();
       if (!user) throw new Error(t('post_login_required') || 'Login required');
 
-      // 🛑 AD BOUNCER CHECK (Max 3 per day) 🛑
-      const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const { count } = await supabase.from('listings')
-        .select('*', { count: 'exact', head: true })
-        .eq('seller_id', user.id)
-        .gte('created_at', twentyFourHoursAgo);
-
-      if (count !== null && count >= 3) {
-        Toast.show({ type: 'error', text1: 'Daily Limit Reached', text2: 'You can only post 3 ads per 24 hours to prevent spam.', position: 'top' });
-        return; // Stop the upload!
-      }
-
       let currentLat: number | null = null;
       let currentLng: number | null = null;
-      
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
@@ -282,6 +361,14 @@ export default function PostAd() {
       } catch (err) {
         console.log("GPS fetch failed or was denied.");
       }
+
+      const contentToScan = `${title} ${description}`;
+      const isFlagged = containsInappropriateContent(contentToScan);
+      
+      const autoStatus = isFlagged ? 'action_required' : 'approved';
+      const autoNote = isFlagged 
+        ? "Automated Review: Your ad contains flagged keywords or inappropriate language. Please edit your title or description to comply with our community guidelines." 
+        : null;
 
       const uploadedUrls: string[] = [];
       for (const uri of images) {
@@ -295,62 +382,98 @@ export default function PostAd() {
         uploadedUrls.push(publicUrl);
       }
 
-      const { error } = await supabase.from('listings').insert({
-        seller_id:   user.id,
-        title,
-        price:       parseFloat(price),
-        description,
-        category,
-        condition:   condition || null,
-        location:    locationText,
-        image_urls:  uploadedUrls,
-        highlights:  highlights.length > 0 ? highlights : null,
-        is_sold:     false, 
-        translations: {},
-        lat: currentLat,
-        lng: currentLng
+      const { data, error } = await supabase.rpc('post_new_ad', {
+        p_user_id: user.id,
+        p_category: category,
+        p_title: title,
+        p_description: description,
+        p_location: locationText,
+        p_price: parseFloat(price),
+        p_image_urls: uploadedUrls,
+        p_condition: condition || null,
+        p_highlights: highlights.length > 0 ? highlights : null,
+        p_lat: currentLat,
+        p_lng: currentLng
       });
 
-      if (error) throw error;
+      if (error) {
+        Toast.show({ type: 'error', text1: 'Database Error', text2: error.message, position: 'top' });
+        setIsUploading(false);
+        return;
+      }
 
-      // Show sleek success Toast and redirect
-      Toast.show({ type: 'success', text1: t('post_success_title') || 'Success!', text2: t('post_success_msg') || 'Ad posted successfully.', position: 'top' });
-      router.replace('/home');
+      if (data && data.success === false) {
+        setIsUploading(false);
+        Alert.alert(
+          "Limit Reached", 
+          data.error,
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Upgrade to Pro", onPress: () => router.push('/billing' as any) }
+          ]
+        );
+        return;
+      }
+
+      if (category === 'Other' && customCategory.trim() && data?.listing_id) {
+        await supabase.from('listings').update({ custom_category: customCategory.trim() }).eq('id', data.listing_id);
+      }
+
+      if (data?.listing_id) {
+         await supabase.from('listings')
+           .update({ approval_status: autoStatus, moderation_note: autoNote })
+           .eq('id', data.listing_id);
+      }
+
+      if (isFlagged) {
+        Toast.show({ 
+          type: 'error', 
+          text1: 'Ad Flagged', 
+          text2: 'Your ad was flagged for inappropriate content. Please check your inactive ads to edit it.', 
+          position: 'top' 
+        });
+      } else {
+        Toast.show({ 
+          type: 'success', 
+          text1: 'Ad Published', 
+          text2: 'Your ad is now live on Boltzy!', 
+          position: 'top' 
+        });
+      }
+      
+      router.replace('/my-ads' as any);
       
     } catch (error: any) {
-      Toast.show({ type: 'error', text1: t('common_error') || 'Error', text2: error.message, position: 'top' });
+      Toast.show({ type: 'error', text1: 'Error', text2: error.message, position: 'top' });
     } finally {
       setIsUploading(false);
     }
   };
 
-  // ─────────────────────────────────────────────────────────────────────────
-  //  RENDER
-  // ─────────────────────────────────────────────────────────────────────────
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={styles.container}
-    >
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={{ padding: 8 }}>
-          <Ionicons name="close" size={28} color="#000" />
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+        <TouchableOpacity onPress={handleBackPress} style={{ padding: 8 }}>
+          <Ionicons name="close" size={28} color={colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{t('post_title')}</Text>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>{t('post_title')}</Text>
         <View style={{ width: 44 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-
-        {/* ── PHOTOS ──────────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>{t('post_add_photos')}</Text>
-        <Text style={styles.sectionHint}>{t('post_photos_hint')}</Text>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('post_add_photos')}</Text>
+        <Text style={[styles.sectionHint, { color: colors.textSecondary }]}>{t('post_photos_hint')}</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imageScroll}>
           {images.length < 5 && (
-            <TouchableOpacity style={styles.addImageBtn} onPress={pickImage}>
-              <Ionicons name="camera" size={32} color="#666" />
-              <Text style={styles.addImageText}>{t('post_add_photo_btn')}</Text>
+            <TouchableOpacity style={[styles.addImageBtn, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]} onPress={pickImage}>
+              <Ionicons name="camera" size={32} color={colors.textSecondary} />
+              <Text style={[styles.addImageText, { color: colors.textSecondary }]}>{t('post_add_photo_btn')}</Text>
             </TouchableOpacity>
+          )}
+          {isProcessingImages && (
+            <View style={styles.imagePreviewContainer}>
+              <Skeleton width={100} height={100} borderRadius={12} />
+            </View>
           )}
           {images.map((uri, index) => (
             <View key={index} style={styles.imagePreviewContainer}>
@@ -365,138 +488,170 @@ export default function PostAd() {
           ))}
         </ScrollView>
 
-        {/* ── AD DETAILS ──────────────────────────────────── */}
-        <Text style={styles.sectionTitle}>{t('post_ad_details')}</Text>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('post_ad_details')}</Text>
 
-        <Text style={styles.label}>{t('post_label_title')} <Text style={styles.required}>*</Text></Text>
+        <Text style={[styles.label, { color: colors.text }]}>{t('post_label_title')} <Text style={styles.required}>*</Text></Text>
         <TextInput
-          style={[
-            styles.input, 
-            missingFields.includes('title') && { borderColor: '#FF3B30', borderWidth: 2 }
-          ]}
+          style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }, missingFields.includes('title') && { borderColor: '#FF3B30', borderWidth: 2 }]}
           value={title}
           onChangeText={(text) => {
             setTitle(text);
             if (missingFields.includes('title')) setMissingFields(prev => prev.filter(e => e !== 'title')); 
           }}
         />
-        
-        <Text style={styles.charCount}>{title.length}/70</Text>
+        <Text style={[styles.charCount, { color: colors.textSecondary }]}>{title.length}/70</Text>
 
-        <Text style={styles.label}>{t('post_label_price')} <Text style={styles.required}>*</Text></Text>
+        <Text style={[styles.label, { color: colors.text }]}>{t('post_label_price')} <Text style={styles.required}>*</Text></Text>
         <View style={styles.priceRow}>
-          <Text style={styles.currencySymbol}>₹</Text>
-         <TextInput
-            style={[styles.input, { flex: 1, marginBottom: 0 }, missingFields.includes('price') && { borderColor: '#FF3B30', borderWidth: 2 }]}
+          <Text style={[styles.currencySymbol, { color: colors.text }]}>₹</Text>
+          <TextInput
+            style={[styles.input, { flex: 1, marginBottom: 0, backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }, missingFields.includes('price') && { borderColor: '#FF3B30', borderWidth: 2 }]}
             placeholder={t('post_placeholder_price')}
+            placeholderTextColor={colors.textSecondary}
             value={price}
             onChangeText={(val) => { setPrice(val); setMissingFields(prev => prev.filter(f => f !== 'price')); }}
             keyboardType="numeric"
           />
         </View>
 
-        <Text style={styles.label}>{t('post_label_category')} <Text style={styles.required}>*</Text></Text>
+        <Text style={[styles.label, { color: colors.text }]}>{t('post_label_category')} <Text style={styles.required}>*</Text></Text>
         <TouchableOpacity 
-          style={[styles.categorySelector, missingFields.includes('category') && { borderColor: '#FF3B30', borderWidth: 2 }]} 
+          style={[styles.categorySelector, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }, missingFields.includes('category') && { borderColor: '#FF3B30', borderWidth: 2 }]} 
           onPress={() => { setCategoryModalVisible(true); setMissingFields(prev => prev.filter(f => f !== 'category')); }}
         >
-          <Text style={{ color: category ? '#000' : '#999', fontSize: 16 }}>
+          <Text style={{ color: category ? colors.text : colors.textSecondary, fontSize: 16 }}>
             {category ? t(categoryI18nKey(category)) : t('post_select_category')}
           </Text>
-          <Ionicons name="chevron-forward" size={20} color="#666" />
+          <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
         </TouchableOpacity>
 
-        <Text style={styles.label}>{t('post_label_condition')}</Text>
+        {category === 'Other' && (
+          <View style={{ marginTop: 8, marginBottom: 8 }}>
+            <Text style={[styles.label, { color: colors.text }]}>Specify Category <Text style={styles.required}>*</Text></Text>
+            <TextInput
+              style={[
+                styles.input, 
+                { marginBottom: 0, backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text },
+                missingFields.includes('customCategory') && { borderColor: '#FF3B30', borderWidth: 2 }
+              ]}
+              placeholder="e.g. Antique Coins, Musical Instruments"
+              placeholderTextColor={colors.textSecondary}
+              value={customCategory}
+              onChangeText={(text) => {
+                setCustomCategory(text);
+                if (missingFields.includes('customCategory')) {
+                  setMissingFields(prev => prev.filter(e => e !== 'customCategory'));
+                }
+              }}
+            />
+            <Text style={[styles.hintText, { color: colors.textSecondary }]}>Help us improve by typing what you are selling.</Text>
+          </View>
+        )}
+
+        <Text style={[styles.label, { color: colors.text }]}>{t('post_label_condition')}</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             {CONDITIONS.map(c => (
               <TouchableOpacity
                 key={c}
-                style={[styles.condChip, condition === c && styles.condChipActive]}
+                style={[
+                  styles.condChip, 
+                  { backgroundColor: colors.backgroundSecondary, borderColor: colors.border },
+                  condition === c && { backgroundColor: colors.tint, borderColor: colors.tint }
+                ]}
                 onPress={() => setCondition(condition === c ? '' : c)}
               >
-                <Text style={[styles.condChipText, condition === c && styles.condChipTextActive]}>{t(c)}</Text>
+                <Text style={[
+                  styles.condChipText, 
+                  { color: colors.textSecondary },
+                  condition === c && { color: isDark ? '#000' : '#fff', fontWeight: '700' }
+                ]}>
+                  {t(c)}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
         </ScrollView>
 
-        {/* ── LOCATION (OLX-STYLE AUTOCOMPLETE) ────────────────────────────── */}
-        <Text style={styles.sectionTitle}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>
           {t('post_location_title')}<Text style={styles.required}>*</Text>
         </Text>
         
         <View style={{ zIndex: 10 }}>
           <View style={styles.locationContainer}>
-           <TextInput
-              style={[styles.input, { flex: 1, marginBottom: 0 }, missingFields.includes('location') && { borderColor: '#FF3B30', borderWidth: 2 }]}
-              placeholder={t('post_placeholder_location')}
-              value={locationText}
-              onChangeText={(text) => {
-                setLocationText(text);
-                setShowLocSuggestions(text.length > 0);
-                setMissingFields(prev => prev.filter(f => f !== 'location'));
-              }}
-              onFocus={() => locationText.length > 0 && setShowLocSuggestions(true)}
-            />
-            <TouchableOpacity style={styles.gpsBtn} onPress={fetchExactLocation} disabled={isFetchingLocation}>
+            {isFetchingLocation ? (
+              <Skeleton height={55} borderRadius={12} style={{ flex: 1, marginBottom: 0 }} />
+            ) : (
+              <TextInput
+                style={[styles.input, { flex: 1, marginBottom: 0, backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }, missingFields.includes('location') && { borderColor: '#FF3B30', borderWidth: 2 }]}
+                placeholder={t('post_placeholder_location')}
+                placeholderTextColor={colors.textSecondary}
+                value={locationText}
+                onChangeText={(text) => {
+                  setLocationText(text);
+                  setShowLocSuggestions(text.length > 0);
+                  setMissingFields(prev => prev.filter(f => f !== 'location'));
+                }}
+                onFocus={() => locationText.length > 0 && setShowLocSuggestions(true)}
+              />
+            )}
+            <TouchableOpacity style={[styles.gpsBtn, { backgroundColor: colors.tint }]} onPress={fetchExactLocation} disabled={isFetchingLocation}>
               {isFetchingLocation
-                ? <ActivityIndicator size="small" color="#fff" />
-                : <Ionicons name="locate" size={24} color="#fff" />
+                ? <ActivityIndicator size="small" color={isDark ? '#000' : '#fff'} />
+                : <Ionicons name="locate" size={24} color={isDark ? '#000' : '#fff'} />
               }
             </TouchableOpacity>
           </View>
 
-          {/* Autocomplete Dropdown */}
           {showLocSuggestions && (
-            <View style={styles.suggestionsDropdown}>
+            <View style={[styles.suggestionsDropdown, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={{ maxHeight: 150 }}>
                 {POPULAR_LOCATIONS
                   .filter(loc => loc.toLowerCase().includes(locationText.toLowerCase()))
                   .map(loc => (
                     <TouchableOpacity 
                       key={loc} 
-                      style={styles.suggestionItem}
-                      onPress={() => {
-                        setLocationText(loc);
-                        setShowLocSuggestions(false);
-                      }}
+                      style={[styles.suggestionItem, { borderBottomColor: colors.border }]}
+                      onPress={() => { setLocationText(loc); setShowLocSuggestions(false); }}
                     >
-                      <Ionicons name="location-outline" size={16} color="#666" style={{ marginRight: 8 }} />
-                      <Text style={{ fontSize: 14, color: '#333' }}>{loc}</Text>
+                      <Ionicons name="location-outline" size={16} color={colors.textSecondary} style={{ marginRight: 8 }} />
+                      <Text style={{ fontSize: 14, color: colors.text }}>{loc}</Text>
                     </TouchableOpacity>
                   ))
                 }
-                {/* Fallback if no match is found but they typed something */}
                 {POPULAR_LOCATIONS.filter(loc => loc.toLowerCase().includes(locationText.toLowerCase())).length === 0 && (
                   <TouchableOpacity 
-                      style={styles.suggestionItem}
-                      onPress={() => setShowLocSuggestions(false)}
-                    >
-                      <Ionicons name="checkmark-circle-outline" size={16} color="#007AFF" style={{ marginRight: 8 }} />
-                      <Text style={{ fontSize: 14, color: '#007AFF' }}>Use "{locationText}"</Text>
+                    style={[styles.suggestionItem, { borderBottomColor: colors.border }]}
+                    onPress={() => setShowLocSuggestions(false)}
+                  >
+                    <Ionicons name="checkmark-circle-outline" size={16} color="#007AFF" style={{ marginRight: 8 }} />
+                    <Text style={{ fontSize: 14, color: '#007AFF' }}>Use "{locationText}"</Text>
                   </TouchableOpacity>
                 )}
               </ScrollView>
             </View>
           )}
         </View>
-        <Text style={styles.hintText}>{t('post_location_hint')}</Text>
+        <Text style={[styles.hintText, { color: colors.textSecondary }]}>{t('post_location_hint')}</Text>
 
-       {/* ── KEY HIGHLIGHTS ────────────────────────── */}
-        <View style={styles.highlightsSection}>
+        <View style={[styles.highlightsSection, { backgroundColor: isDark ? '#231e13' : '#fffbf0', borderColor: isDark ? '#5c450c' : '#ffe082' }]}>
           <View style={styles.highlightsHeader}>
             <Ionicons name="flash" size={18} color="#F5A623" />
-            <Text style={styles.sectionTitle}>{t('post_highlights_title')}</Text>
+            <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 0, marginBottom: 0 }]}>{t('post_highlights_title')}</Text>
             <Text style={styles.highlightCount}>{highlights.length}/8</Text>
           </View>
           
-          <Text style={styles.sectionHint}>
-            {t('post_highlights_hint')}
-          </Text>
+          <Text style={[styles.sectionHint, { color: colors.textSecondary }]}>{t('post_highlights_hint')}</Text>
 
-          {/* Added chips */}
-          {highlights.length > 0 && (
+          {isGeneratingAI && (
+            <View style={styles.chipsWrap}>
+              <Skeleton width={80} height={32} borderRadius={16} />
+              <Skeleton width={110} height={32} borderRadius={16} />
+              <Skeleton width={90} height={32} borderRadius={16} />
+            </View>
+          )}
+
+          {!isGeneratingAI && highlights.length > 0 && (
             <View style={styles.chipsWrap}>
               {highlights.map((h, i) => (
                 <View key={i} style={styles.highlightChip}>
@@ -509,12 +664,12 @@ export default function PostAd() {
             </View>
           )}
 
-          {/* Input + add */}
           {highlights.length < 8 && (
             <View style={styles.highlightInputRow}>
               <TextInput
-                style={styles.highlightInput}
+                style={[styles.highlightInput, { backgroundColor: colors.card, borderColor: colors.border, color: colors.text }]}
                 placeholder={t('post_highlights_placeholder')}
+                placeholderTextColor={colors.textSecondary}
                 value={highlightInput}
                 onChangeText={setHighlightInput}
                 onSubmitEditing={() => addHighlight(highlightInput)}
@@ -531,18 +686,17 @@ export default function PostAd() {
             </View>
           )}
 
-          {/* Suggestions */}
           {highlights.length < 8 && (
             <View>
-              <Text style={styles.suggestLabel}>{t('post_highlights_quick_add')}</Text>
+              <Text style={[styles.suggestLabel, { color: colors.textSecondary }]}>{t('post_highlights_quick_add')}</Text>
               <View style={styles.chipsWrap}>
                 {suggestionKeys
                   .map(k => t(k))
                   .filter(s => !highlights.includes(s))
                   .map((sug, i) => (
-                    <TouchableOpacity key={i} style={styles.suggestionChip} onPress={() => addSuggestion(sug)}>
+                    <TouchableOpacity key={i} style={[styles.suggestionChip, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => addSuggestion(sug)}>
                       <Ionicons name="add-circle-outline" size={13} color="#007AFF" style={{ marginRight: 3 }} />
-                      <Text style={styles.suggestionChipText}>{sug}</Text>
+                      <Text style={[styles.suggestionChipText, { color: colors.text }]}>{sug}</Text>
                     </TouchableOpacity>
                   ))
                 }
@@ -551,9 +705,8 @@ export default function PostAd() {
           )}
         </View>
 
-   {/* ── DESCRIPTION ─────────────────────────────────── */}
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 24, marginBottom: 6 }}>
-          <Text style={[styles.sectionTitle, { marginTop: 0, marginBottom: 0 }]}>
+          <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 0, marginBottom: 0 }]}>
             {t('post_desc_title') || 'Description'} <Text style={styles.required}>*</Text>
           </Text>
           
@@ -573,61 +726,62 @@ export default function PostAd() {
           </TouchableOpacity>
         </View>
 
-        <TextInput
-          style={[
-            styles.input, 
-            { height: 110, textAlignVertical: 'top' },
-            // ✨ FIX: Show red border if description is missing
-            missingFields.includes('description') && { borderColor: '#FF3B30', borderWidth: 2 }
-          ]}
-          placeholder={t('post_desc_placeholder')}
-          value={description}
-          onChangeText={(text) => {
-            setDescription(text);
-            // ✨ FIX: Clear the red box as soon as they type
-            if (missingFields.includes('description')) {
-              setMissingFields(prev => prev.filter(e => e !== 'description')); 
-            }
-          }}
-          multiline
-          maxLength={2000}
-        />
-        <Text style={styles.charCount}>{description.length}/2000</Text>
+        {isGeneratingAI ? (
+          <Skeleton width="100%" height={110} borderRadius={12} style={{ marginBottom: 8 }} />
+        ) : (
+          <TextInput
+            style={[
+              styles.input, 
+              { height: 110, textAlignVertical: 'top', backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text },
+              missingFields.includes('description') && { borderColor: '#FF3B30', borderWidth: 2 }
+            ]}
+            placeholder={t('post_desc_placeholder')}
+            placeholderTextColor={colors.textSecondary}
+            value={description}
+            onChangeText={(text) => {
+              setDescription(text);
+              if (missingFields.includes('description')) {
+                setMissingFields(prev => prev.filter(e => e !== 'description')); 
+              }
+            }}
+            multiline
+            maxLength={2000}
+          />
+        )}
+        <Text style={[styles.charCount, { color: colors.textSecondary }]}>{description.length}/2000</Text>
 
-        {/* ── SUBMIT ──────────────────────────────────────── */}
         <TouchableOpacity
-          style={[styles.submitBtn, isUploading && styles.submitBtnDisabled]}
+          style={[styles.submitBtn, { backgroundColor: colors.tint }, isUploading && styles.submitBtnDisabled]}
           onPress={handlePostAd}
           disabled={isUploading}
         >
           {isUploading
-            ? <ActivityIndicator color="#fff" />
+            ? <ActivityIndicator color={isDark ? '#000' : '#fff'} />
             : (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons name="checkmark-circle" size={22} color="#fff" />
-                <Text style={styles.submitBtnText}>{t('post_submit')}</Text>
+                <Ionicons name="checkmark-circle" size={22} color={isDark ? '#000' : '#fff'} />
+                <Text style={[styles.submitBtnText, { color: isDark ? '#000' : '#fff' }]}>{t('post_submit')}</Text>
               </View>
             )
           }
         </TouchableOpacity>
-
       </ScrollView>
 
-      {/* ── CATEGORY MODAL ──────────────────────────────── */}
       <Modal visible={isCategoryModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{t('post_modal_category')}</Text>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>{t('post_modal_category')}</Text>
               <TouchableOpacity onPress={() => setCategoryModalVisible(false)}>
-                <Ionicons name="close" size={28} color="#000" />
+                <Ionicons name="close" size={28} color={colors.text} />
               </TouchableOpacity>
             </View>
-            <View style={styles.searchBox}>
-              <Ionicons name="search" size={20} color="#999" style={{ marginRight: 10 }} />
+            <View style={[styles.searchBox, { backgroundColor: colors.backgroundSecondary }]}>
+              <Ionicons name="search" size={20} color={colors.textSecondary} style={{ marginRight: 10 }} />
               <TextInput
-                style={styles.searchInput}
+                style={[styles.searchInput, { color: colors.text }]}
                 placeholder={t('post_search_categories')}
+                placeholderTextColor={colors.textSecondary}
                 value={categorySearch}
                 onChangeText={setCategorySearch}
                 autoFocus
@@ -639,17 +793,17 @@ export default function PostAd() {
               keyboardShouldPersistTaps="handled"
               renderItem={({ item }) => (
                 <TouchableOpacity
-                  style={styles.categoryRow}
+                  style={[styles.categoryRow, { borderBottomColor: colors.border }]}
                   onPress={() => { setCategory(item); setCategoryModalVisible(false); setCategorySearch(''); }}
                 >
-                  <Text style={styles.categoryRowText}>{t(categoryI18nKey(item))}</Text>
+                  <Text style={[styles.categoryRowText, { color: colors.text }]}>{t(categoryI18nKey(item))}</Text>
                   {category === item
                     ? <Ionicons name="checkmark-circle" size={22} color="#007AFF" />
-                    : <Ionicons name="chevron-forward" size={20} color="#ccc" />
+                    : <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
                   }
                 </TouchableOpacity>
               )}
-              ListEmptyComponent={<Text style={styles.emptyText}>{t('post_no_categories')}</Text>}
+              ListEmptyComponent={<Text style={[styles.emptyText, { color: colors.textSecondary }]}>{t('post_no_categories')}</Text>}
             />
           </View>
         </View>
@@ -659,41 +813,37 @@ export default function PostAd() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container:      { flex: 1, backgroundColor: '#fff' },
-  header:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 20, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  container:      { flex: 1 },
+  header:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 20, borderBottomWidth: 1 },
   headerTitle:    { fontSize: 20, fontWeight: 'bold' },
   scrollContent:  { padding: 20, paddingBottom: 120 },
 
-  sectionTitle:   { fontSize: 17, fontWeight: 'bold', marginTop: 24, marginBottom: 6, color: '#000' },
-  sectionHint:    { fontSize: 12, color: '#aaa', marginBottom: 12 },
-  label:          { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 8, marginTop: 16 },
+  sectionTitle:   { fontSize: 17, fontWeight: 'bold', marginTop: 24, marginBottom: 6 },
+  sectionHint:    { fontSize: 12, marginBottom: 12 },
+  label:          { fontSize: 14, fontWeight: '600', marginBottom: 8, marginTop: 16 },
   required:       { color: '#FF3B30' },
-  hintText:       { fontSize: 12, color: '#888', marginTop: 6, fontStyle: 'italic' },
-  charCount:      { fontSize: 11, color: '#ccc', textAlign: 'right', marginTop: 2, marginBottom: 4 },
+  hintText:       { fontSize: 12, marginTop: 6, fontStyle: 'italic' },
+  charCount:      { fontSize: 11, textAlign: 'right', marginTop: 2, marginBottom: 4 },
 
   input: {
-    backgroundColor: '#f9f9f9', borderWidth: 1, borderColor: '#eee',
-    borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 8,
+    borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 8,
   },
 
   priceRow:       { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  currencySymbol: { fontSize: 20, fontWeight: 'bold', color: '#000', marginBottom: 8 },
+  currencySymbol: { fontSize: 20, fontWeight: 'bold', marginBottom: 8 },
 
   locationContainer: { flexDirection: 'row', gap: 10, alignItems: 'center', marginBottom: 4 },
-  gpsBtn:         { backgroundColor: '#000', width: 55, height: 55, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  gpsBtn:         { width: 55, height: 55, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
 
-  categorySelector: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f9f9f9', borderWidth: 1, borderColor: '#eee', borderRadius: 12, padding: 16, marginBottom: 8 },
+  categorySelector: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderRadius: 12, padding: 16, marginBottom: 8 },
 
-  condChip:           { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: '#f5f5f5', borderWidth: 1.5, borderColor: '#e0e0e0' },
-  condChipActive:     { backgroundColor: '#000', borderColor: '#000' },
-  condChipText:       { fontSize: 13, color: '#666', fontWeight: '500' },
-  condChipTextActive: { color: '#fff', fontWeight: '700' },
+  condChip:           { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5 },
+  condChipText:       { fontSize: 13, fontWeight: '500' },
 
   imageScroll:          { flexDirection: 'row', marginBottom: 10 },
-  addImageBtn:          { width: 100, height: 100, borderRadius: 12, backgroundColor: '#f5f5f5', justifyContent: 'center', alignItems: 'center', marginRight: 12, borderWidth: 1.5, borderColor: '#ddd', borderStyle: 'dashed' },
-  addImageText:         { color: '#888', marginTop: 6, fontSize: 12, fontWeight: '500' },
+  addImageBtn:          { width: 100, height: 100, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 12, borderWidth: 1.5, borderStyle: 'dashed' },
+  addImageText:         { marginTop: 6, fontSize: 12, fontWeight: '500' },
   imagePreviewContainer:{ position: 'relative', marginRight: 12 },
   imagePreview:         { width: 100, height: 100, borderRadius: 12 },
   removeImageBtn:       { position: 'absolute', top: -8, right: -8, backgroundColor: '#fff', borderRadius: 12 },
@@ -701,8 +851,8 @@ const styles = StyleSheet.create({
   coverBadgeText:       { color: '#fff', fontSize: 10, fontWeight: 'bold' },
 
   highlightsSection: {
-    backgroundColor: '#fffbf0', borderRadius: 16, padding: 16,
-    borderWidth: 1, borderColor: '#ffe082', marginTop: 24, marginBottom: 8,
+    borderRadius: 16, padding: 16,
+    borderWidth: 1, marginTop: 24, marginBottom: 8,
   },
   highlightsHeader:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
   highlightCount:     { fontSize: 12, color: '#F5A623', fontWeight: '700', marginLeft: 'auto' as any },
@@ -716,36 +866,31 @@ const styles = StyleSheet.create({
   highlightChipText:  { fontSize: 13, color: '#007AFF', fontWeight: '600' },
   highlightInputRow:  { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
   highlightInput: {
-    flex: 1, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e0e0e0',
-    borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15,
+    flex: 1, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15,
   },
   addHighlightBtn:    { width: 42, height: 42, borderRadius: 21, backgroundColor: '#007AFF', justifyContent: 'center', alignItems: 'center' },
-  suggestLabel:       { fontSize: 12, color: '#aaa', fontWeight: '600', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
+  suggestLabel:       { fontSize: 12, fontWeight: '600', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   suggestionChip: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#f8f8f8', borderRadius: 20,
-    paddingHorizontal: 12, paddingVertical: 7,
-    borderWidth: 1, borderColor: '#e0e0e0',
+    borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1,
   },
-  suggestionChipText: { fontSize: 13, color: '#555' },
+  suggestionChipText: { fontSize: 13 },
 
-  submitBtn:          { backgroundColor: '#000', borderRadius: 14, padding: 18, alignItems: 'center', marginTop: 32 },
-  submitBtnDisabled:  { backgroundColor: '#666' },
-  submitBtnText:      { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  submitBtn:          { borderRadius: 14, padding: 18, alignItems: 'center', marginTop: 32 },
+  submitBtnDisabled:  { opacity: 0.6 },
+  submitBtnText:      { fontSize: 18, fontWeight: 'bold' },
 
   modalOverlay:   { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalContent:   { backgroundColor: '#fff', height: '80%', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20 },
+  modalContent:   { height: '80%', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20 },
   modalHeader:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   modalTitle:     { fontSize: 22, fontWeight: 'bold' },
-  searchBox:      { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f0f0f0', borderRadius: 12, paddingHorizontal: 16, height: 50, marginBottom: 20 },
-  searchInput:    { flex: 1, fontSize: 16, color: '#000' },
-  categoryRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
-  categoryRowText:{ fontSize: 16, color: '#333' },
-  emptyText:      { textAlign: 'center', color: '#999', marginTop: 20 },
+  searchBox:      { flexDirection: 'row', alignItems: 'center', borderRadius: 12, paddingHorizontal: 16, height: 50, marginBottom: 20 },
+  searchInput:    { flex: 1, fontSize: 16 },
+  categoryRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 16, borderBottomWidth: 1 },
+  categoryRowText:{ fontSize: 16 },
+  emptyText:      { textAlign: 'center', marginTop: 20 },
   suggestionsDropdown: {
-    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: '#eee',
     borderRadius: 12,
     marginTop: 4,
     elevation: 4,
@@ -760,6 +905,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#f5f5f5'
   },
 });

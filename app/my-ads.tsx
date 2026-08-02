@@ -1,18 +1,32 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, StyleSheet, Text, TouchableOpacity, View, Platform } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { ActivityIndicator, Alert, FlatList, Image, StyleSheet, Text, TouchableOpacity, View, Platform, Animated } from 'react-native';
 import { supabase } from '../supabase';
 import { getCurrentUser } from '../utils/auth';
 import { useLanguage } from '../context/LanguageContext';
-// ✨ NEW: Import Razorpay and Toast
 import Toast from 'react-native-toast-message';
+import { useTheme } from '../context/ThemeContext'; 
+
+const Skeleton = ({ width, height, style, borderRadius = 8, isDark = false }: { width?: any, height: any, style?: any, borderRadius?: number, isDark?: boolean }) => {
+  const fadeAnim = useRef(new Animated.Value(0.5)).current;
+  useEffect(() => {
+    Animated.loop(Animated.sequence([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+      Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
+    ])).start();
+  }, [fadeAnim]);
+  return <Animated.View style={[{ width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, style]} />;
+};
 
 export default function MyAds() {
   const router = useRouter();
   const { lang, t, translateUGC } = useLanguage();
+  const { colors, isDark } = useTheme();
+  
   const [myListings, setMyListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'Active' | 'Sold' | 'Inactive'>('Active');
 
   useEffect(() => {
     fetchMyListings();
@@ -25,7 +39,7 @@ export default function MyAds() {
 
     const { data, error } = await supabase
       .from('listings')
-      .select('*')
+      .select('*, chats(count)')
       .eq('seller_id', user.id)
       .order('created_at', { ascending: false });
 
@@ -33,52 +47,88 @@ export default function MyAds() {
     setLoading(false);
   };
 
-  // ✨ THE RAZORPAY PROMOTION ENGINE
-// ✨ THE RAZORPAY PROMOTION ENGINE
-  const handlePromoteAd = async (item: any) => {
+  const activeAds = myListings.filter(i => (i.approval_status === 'approved' || !i.approval_status) && !i.is_sold);
+  const soldAds = myListings.filter(i => i.is_sold);
+  const inactiveAds = myListings.filter(i => !i.is_sold && ['draft', 'pending', 'rejected', 'action_required'].includes(i.approval_status));
+
+  const getVisibleAds = () => {
+    if (activeTab === 'Active') return activeAds;
+    if (activeTab === 'Sold') return soldAds;
+    return inactiveAds;
+  };
+
+  const handlePromoteAd = (item: any) => {
+    if (Platform.OS === 'web') {
+      if (window.confirm("TERMS OF SERVICE: By proceeding, you acknowledge that this digital ad promotion is strictly non-refundable. Do you agree?")) {
+        executePromoteAd(item);
+      }
+    } else {
+      Alert.alert(
+        "Terms of Service",
+        "By proceeding, you acknowledge that this digital ad promotion is strictly non-refundable. Do you agree?",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "I Agree & Pay", onPress: () => executePromoteAd(item) }
+        ]
+      );
+    }
+  };
+
+  const executePromoteAd = async (item: any) => {
+    setLoading(true); 
     try {
       const user = await getCurrentUser();
-      if (!user) throw new Error("Please log in to make a payment.");
+      if (!user) throw new Error("You must be logged in to promote an ad.");
 
-      // 💻 ✨ WEB BYPASS: Simulate the payment so we can test the UI on laptops!
-      if (Platform.OS === 'web') {
-        const { error } = await supabase.from('listings').update({ is_premium: true }).eq('id', item.id);
-        if (error) throw error;
-        setMyListings(prev => prev.map(ad => ad.id === item.id ? { ...ad, is_premium: true } : ad));
-        Toast.show({ type: 'success', text1: 'Simulated Web Payment', text2: 'Your ad is now Gold!', position: 'top' });
-        return;
-      }
+      const { data: orderData, error: orderError } = await supabase.functions.invoke('create-razorpay-order', {
+        body: { plan_type: 'single_ad', user_id: user.id, listing_id: item.id }
+      });
 
-      // 📱 ✨ MOBILE ONLY: Dynamically load Razorpay to prevent Web crashes
-      const RazorpayCheckout = require('react-native-razorpay').default;
+      if (orderError) throw orderError;
+      if (!orderData || !orderData.order_id) throw new Error("Could not generate secure order from server.");
 
-      // 1. Prepare the payment settings specifically for THIS ad
-      const options = {
-        description: `Promote Ad: ${item.title}`,
-        image: 'https://boltzy.in/icon.png', 
-        currency: 'INR',
-        key: process.env.EXPO_PUBLIC_RAZORPAY_KEY_ID || '', 
-        amount: 9900, 
-        name: 'Boltzy Premium',
-        prefill: { email: user.email || '', contact: user.phone || '', name: 'Boltzy User' },
-        theme: { color: '#000000' } 
+      let paymentData: any = {
+        razorpay_order_id: orderData.order_id,
+        razorpay_payment_id: `pay_sim_${Math.floor(Math.random() * 10000)}`,
+        razorpay_signature: 'simulated_signature'
       };
 
-      // 2. Open the Razorpay Bottom Sheet
-      const data = await RazorpayCheckout.open(options);
+      if (Platform.OS !== 'web') {
+        const RazorpayCheckout = require('react-native-razorpay').default;
+        const options = {
+          description: `Promote "${item.title}" for 1 Month`,
+          image: 'https://boltzy.in/icon.png', 
+          currency: 'INR',
+          key: process.env.EXPO_PUBLIC_RAZORPAY_KEY_ID || '', 
+          amount: orderData.amount,         
+          order_id: orderData.order_id,     
+          name: 'Boltzy Single Ad Pro',
+          theme: { color: '#000000' } 
+        };
+        paymentData = await RazorpayCheckout.open(options);
+      }
 
-      // 3. If Successful, instantly update Supabase!
-      const { error } = await supabase.from('listings').update({ is_premium: true }).eq('id', item.id);
-      if (error) throw error;
+      const { error: funcError } = await supabase.functions.invoke('verify-razorpay-payment', {
+        body: {
+          razorpay_order_id: paymentData.razorpay_order_id,
+          razorpay_payment_id: paymentData.razorpay_payment_id,
+          razorpay_signature: paymentData.razorpay_signature,
+          plan_type: 'single_ad',
+          listing_id: item.id,
+          user_id: user.id 
+        }
+      });
 
-      // 4. Update the local UI so it instantly turns gold
-      setMyListings(prev => prev.map(ad => ad.id === item.id ? { ...ad, is_premium: true } : ad));
+      if (funcError) throw funcError;
 
-      Toast.show({ type: 'success', text1: 'Ad Promoted!', text2: 'Your ad is now at the top of the Home Feed!', position: 'top' });
+      Toast.show({ type: 'success', text1: 'Ad Promoted!', text2: 'Your ad is now Gold for 1 month.', position: 'top' });
+      fetchMyListings(); 
 
     } catch (error: any) {
       const errorMsg = error.description || error.message || 'Payment cancelled or failed.';
-      Toast.show({ type: 'error', text1: 'Payment Failed', text2: errorMsg, position: 'top' });
+      Toast.show({ type: 'error', text1: 'Promotion Failed', text2: errorMsg, position: 'top' });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -150,57 +200,76 @@ export default function MyAds() {
   const renderItem = ({ item }: { item: any }) => {
     const imageUrl = item.image_urls?.[0];
     const displayTitle = item.translations?.[lang]?.title || translateUGC(item.title);
+    const chatCount = item.chats?.[0]?.count || 0; 
+
+    const isPending = item.approval_status === 'pending';
+    const isRejected = item.approval_status === 'rejected' || item.approval_status === 'action_required';
+    const isApproved = item.approval_status === 'approved' || !item.approval_status; 
+    const isDraft = item.approval_status === 'draft';
 
     return (
-      <View style={[styles.card, item.is_premium && { borderColor: '#F5A623', borderWidth: 2 }]}>
-        <TouchableOpacity style={styles.cardMain} onPress={() => router.push(`/listing/${item.id}` as any)}>
-          {imageUrl ? ( <Image source={{ uri: imageUrl }} style={styles.image} /> ) : ( <View style={[styles.image, { backgroundColor: '#eee' }]} /> )}
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }, item.is_premium && { borderColor: '#F5A623', borderWidth: 2 }, isRejected && { borderColor: '#FF3B30', borderWidth: 1 }]}>
+        <TouchableOpacity style={styles.cardMain} onPress={() => isApproved ? router.push(`/listing/${item.id}` as any) : null} activeOpacity={isApproved ? 0.7 : 1}>
+          {imageUrl ? ( <Image source={{ uri: imageUrl }} style={[styles.image, (isPending || isRejected || isDraft) && { opacity: 0.5 }]} /> ) : ( <View style={[styles.image, { backgroundColor: colors.backgroundSecondary }]} /> )}
           
           <View style={styles.details}>
-            <Text style={styles.price}>₹{item.price}</Text>
-            <Text style={styles.title} numberOfLines={1}>{displayTitle}</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>{displayTitle}</Text>
+                <Text style={[styles.price, { color: colors.text }]}>₹{item.price}</Text>
+              </View>
+              
+              <View style={[styles.statusBadge, isPending && {backgroundColor: isDark ? '#422006' : '#FFFBEB'}, isRejected && {backgroundColor: isDark ? '#450a0a' : '#FEF2F2'}, isDraft && {backgroundColor: colors.backgroundSecondary}]}>
+                <Text style={[styles.statusText, isPending && {color: isDark ? '#fde047' : '#D97706'}, isRejected && {color: '#FF3B30'}, isDraft && {color: colors.textSecondary}]}>
+                  {item.is_sold ? 'Sold' : isDraft ? 'Draft' : isPending ? 'Pending' : isRejected ? 'Rejected' : 'Active'}
+                </Text>
+              </View>
+            </View>
             
             <View style={styles.statsRow}>
-               <View style={[styles.statusBadge, { backgroundColor: item.is_sold ? '#FFEBEB' : '#E8F5E9' }]}>
-                  <Text style={[styles.statusText, { color: item.is_sold ? '#FF3B30' : '#2E7D32' }]}>
-                    {item.is_sold ? t('my_ads_status_sold') : t('my_ads_status_active')}
-                  </Text>
+               <View style={styles.statItem}>
+                 <Ionicons name="eye-outline" size={16} color={colors.textSecondary} />
+                 <Text style={[styles.statText, { color: colors.textSecondary }]}>{item.views || 0}</Text>
                </View>
-               <Text style={styles.viewCount}><Ionicons name="eye-outline" size={14} color="#888" /> 42</Text>
+               <View style={styles.statItem}>
+                 <Ionicons name="chatbubble-outline" size={15} color={colors.textSecondary} />
+                 <Text style={[styles.statText, { color: colors.textSecondary }]}>{chatCount}</Text>
+               </View>
             </View>
           </View>
         </TouchableOpacity>
 
-        {/* ✨ NEW: PREMIUM UPSELL OR SUCCESS BADGE */}
-        {!item.is_premium ? (
-          <TouchableOpacity 
-            style={styles.promoteBanner} 
-            onPress={() => handlePromoteAd(item)}
-          >
+        {isRejected && item.moderation_note && (
+          <View style={{ backgroundColor: isDark ? '#450a0a' : '#FEF2F2', padding: 12, borderTopWidth: 1, borderTopColor: isDark ? '#7f1d1d' : '#FEE2E2' }}>
+            <Text style={{ color: isDark ? '#fca5a5' : '#B91C1C', fontSize: 13, fontWeight: '600' }}><Ionicons name="warning" size={14} /> Moderation Note:</Text>
+            <Text style={{ color: isDark ? '#fecaca' : '#991B1B', fontSize: 13, marginTop: 4 }}>{item.moderation_note}</Text>
+          </View>
+        )}
+
+        {isApproved && !item.is_premium && !item.is_sold && (
+          <TouchableOpacity style={[styles.promoteBanner, { backgroundColor: isDark ? '#3d2e00' : '#FFFDF5', borderTopColor: colors.border }]} onPress={() => handlePromoteAd(item)}>
             <Ionicons name="star" size={16} color="#F5A623" />
-            <Text style={styles.promoteBannerText}>Promote Ad to Top (₹99)</Text>
+            <Text style={styles.promoteBannerText}>Promote Ad to Top (₹249)</Text>
           </TouchableOpacity>
-        ) : (
+        )}
+        {isApproved && item.is_premium && !item.is_sold && (
           <View style={styles.promotedBadge}>
             <Ionicons name="checkmark-circle" size={16} color="#fff" />
             <Text style={styles.promotedBadgeText}>Promoted (Gold Status)</Text>
           </View>
         )}
 
-        <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.actionBtn} onPress={() => toggleSoldStatus(item.id, item.is_sold)}>
-            <Ionicons name={item.is_sold ? "refresh-outline" : "checkmark-done-outline"} size={18} color="#000" />
-            <Text style={styles.actionBtnText}>{item.is_sold ? t('my_ads_relist') : t('my_ads_mark_sold')}</Text>
+        <View style={[styles.actionRow, { borderTopColor: colors.border }]}>
+          {!item.is_sold && isApproved && (
+            <TouchableOpacity style={styles.actionBtn} onPress={() => toggleSoldStatus(item.id, item.is_sold)}>
+              <Text style={[styles.actionBtnText, { color: colors.text }]}>Mark Sold</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={[styles.actionBtn, (!item.is_sold && isApproved) && [styles.borderLeft, { borderLeftColor: colors.border }]]} onPress={() => router.push(`/edit-post?id=${item.id}` as any)}>
+            <Text style={[styles.actionBtnText, { color: '#007AFF' }]}>{isRejected ? 'Fix Ad' : 'Edit'}</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.actionBtn, styles.borderLeft]} onPress={() => router.push(`/edit-post?id=${item.id}` as any)}>
-            <Ionicons name="create-outline" size={18} color="#007AFF" />
-            <Text style={[styles.actionBtnText, { color: '#007AFF' }]}>{t('my_ads_edit')}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.actionBtn, styles.borderLeft]} onPress={() => deleteAd(item.id)}>
-            <Ionicons name="trash-outline" size={18} color="#FF3B30" />
-            <Text style={[styles.actionBtnText, { color: '#FF3B30' }]}>{t('my_ads_delete')}</Text>
+          <TouchableOpacity style={[styles.actionBtn, styles.borderLeft, { borderLeftColor: colors.border }]} onPress={() => deleteAd(item.id)}>
+            <Text style={[styles.actionBtnText, { color: '#FF3B30' }]}>Delete</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -208,26 +277,64 @@ export default function MyAds() {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color="#000" /></TouchableOpacity>
-        <Text style={styles.headerTitle}>{t('my_ads_title')}</Text>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={[styles.header, { backgroundColor: colors.card }]}>
+        <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color={colors.text} /></TouchableOpacity>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>{t('my_ads_title') || 'My Ads'}</Text>
         <View style={{ width: 28 }} />
       </View>
 
+      <View style={[styles.tabContainer, { backgroundColor: colors.backgroundSecondary }]}>
+        <TouchableOpacity style={[styles.tab, activeTab === 'Active' && [styles.tabActive, { backgroundColor: colors.card }]]} onPress={() => setActiveTab('Active')}>
+          <Text style={[styles.tabText, { color: colors.textSecondary }, activeTab === 'Active' && [styles.tabTextActive, { color: colors.text }]]}>Active ({activeAds.length})</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.tab, activeTab === 'Sold' && [styles.tabActive, { backgroundColor: colors.card }]]} onPress={() => setActiveTab('Sold')}>
+          <Text style={[styles.tabText, { color: colors.textSecondary }, activeTab === 'Sold' && [styles.tabTextActive, { color: colors.text }]]}>Sold ({soldAds.length})</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.tab, activeTab === 'Inactive' && [styles.tabActive, { backgroundColor: colors.card }]]} onPress={() => setActiveTab('Inactive')}>
+          <Text style={[styles.tabText, { color: colors.textSecondary }, activeTab === 'Inactive' && [styles.tabTextActive, { color: colors.text }]]}>Inactive ({inactiveAds.length})</Text>
+        </TouchableOpacity>
+      </View>
+
       {loading ? (
-        <View style={styles.loadingContainer}><ActivityIndicator size="large" color="#000" /></View>
-      ) : myListings.length === 0 ? (
+        <FlatList
+          data={[1, 2, 3, 4]}
+          keyExtractor={(item) => String(item)}
+          contentContainerStyle={styles.listContainer}
+          renderItem={() => (
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={styles.cardMain}>
+                <Skeleton width={90} height={90} borderRadius={12} isDark={isDark} />
+                <View style={styles.details}>
+                  <Skeleton width={80} height={22} style={{ marginBottom: 6 }} isDark={isDark} />
+                  <Skeleton width={160} height={16} style={{ marginBottom: 12 }} isDark={isDark} />
+                  <View style={styles.statsRow}>
+                    <Skeleton width={60} height={22} borderRadius={6} isDark={isDark} />
+                    <Skeleton width={40} height={16} isDark={isDark} />
+                  </View>
+                </View>
+              </View>
+              <View style={[styles.actionRow, { borderTopColor: colors.border }]}>
+                <Skeleton height={46} borderRadius={0} style={{ flex: 1 }} isDark={isDark} />
+                <Skeleton height={46} borderRadius={0} style={[{ flex: 1 }, styles.borderLeft, { borderLeftColor: colors.border }]} isDark={isDark} />
+                <Skeleton height={46} borderRadius={0} style={[{ flex: 1 }, styles.borderLeft, { borderLeftColor: colors.border }]} isDark={isDark} />
+              </View>
+            </View>
+          )}
+        />
+      ) : getVisibleAds().length === 0 ? (
         <View style={styles.emptyState}>
-          <Ionicons name="megaphone-outline" size={80} color="#ccc" />
-          <Text style={styles.emptyText}>{t('my_ads_empty')}</Text>
-          <TouchableOpacity style={styles.postBtn} onPress={() => router.push('/post')}>
-            <Text style={styles.postBtnText}>{t('my_ads_post_first')}</Text>
-          </TouchableOpacity>
+          <Ionicons name="megaphone-outline" size={80} color={colors.textSecondary} />
+          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No {activeTab.toLowerCase()} ads found.</Text>
+          {activeTab === 'Active' && (
+            <TouchableOpacity style={[styles.postBtn, { backgroundColor: colors.tint }]} onPress={() => router.push('/post' as any)}>
+              <Text style={[styles.postBtnText, { color: isDark ? '#000' : '#fff' }]}>{t('my_ads_post_first') || 'Post your first ad'}</Text>
+            </TouchableOpacity>
+          )}
         </View>
       ) : (
         <FlatList
-          data={myListings}
+          data={getVisibleAds()}
           renderItem={renderItem}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContainer}
@@ -239,35 +346,43 @@ export default function MyAds() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8f9fa' },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 60, paddingBottom: 20, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' },
+  container: { flex: 1 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 60, paddingBottom: 20 },
   headerTitle: { fontSize: 22, fontWeight: 'bold' },
+  
+  tabContainer: { flexDirection: 'row', marginHorizontal: 16, marginTop: 10, borderRadius: 12, padding: 4 },
+  tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
+  tabActive: { elevation: 2, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4 },
+  tabText: { fontSize: 14, fontWeight: '600' },
+  tabTextActive: {},
+
   listContainer: { padding: 16 },
-  
-  card: { backgroundColor: '#fff', borderRadius: 16, marginBottom: 16, overflow: 'hidden', elevation: 3, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 },
-  cardMain: { flexDirection: 'row', padding: 12 },
+  card: { borderRadius: 16, marginBottom: 16, overflow: 'hidden', borderWidth: 1, elevation: 1 },
+  cardMain: { flexDirection: 'row', padding: 16 },
   image: { width: 90, height: 90, borderRadius: 12 },
-  details: { flex: 1, marginLeft: 15, justifyContent: 'center' },
-  price: { fontSize: 20, fontWeight: 'bold', color: '#000' },
-  title: { fontSize: 16, color: '#444', marginBottom: 6 },
-  statsRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
-  statusText: { fontSize: 11, fontWeight: 'bold' },
-  viewCount: { fontSize: 13, color: '#888' },
+  details: { flex: 1, marginLeft: 16, justifyContent: 'space-between' },
+  title: { fontSize: 15, fontWeight: '500', marginBottom: 4 },
+  price: { fontSize: 18, fontWeight: 'bold' },
   
-  // ✨ NEW STYLES FOR THE PROMOTE BANNERS
-  promoteBanner: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, backgroundColor: '#FFFDF5', paddingVertical: 12, borderTopWidth: 1, borderTopColor: '#f0f0f0' },
+  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
+  statusText: { fontSize: 11, fontWeight: 'bold' },
+  
+  statsRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 8 },
+  statItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  statText: { fontSize: 13, fontWeight: '500' },
+
+  promoteBanner: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, paddingVertical: 12, borderTopWidth: 1 },
   promoteBannerText: { color: '#F5A623', fontSize: 14, fontWeight: 'bold' },
   promotedBadge: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, backgroundColor: '#F5A623', paddingVertical: 8 },
   promotedBadgeText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
 
-  actionRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#f0f0f0' },
-  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12 },
-  borderLeft: { borderLeftWidth: 1, borderLeftColor: '#f0f0f0' },
+  actionRow: { flexDirection: 'row', borderTopWidth: 1 },
+  actionBtn: { flex: 1, paddingVertical: 14, alignItems: 'center' },
+  borderLeft: { borderLeftWidth: 1 },
   actionBtnText: { fontSize: 14, fontWeight: '600' },
+
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
-  emptyText: { fontSize: 16, color: '#666', marginTop: 16, textAlign: 'center' },
-  postBtn: { marginTop: 20, backgroundColor: '#000', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
-  postBtnText: { color: '#fff', fontWeight: 'bold' },
+  emptyText: { fontSize: 16, marginTop: 16, textAlign: 'center' },
+  postBtn: { marginTop: 20, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
+  postBtnText: { fontWeight: 'bold' },
 });

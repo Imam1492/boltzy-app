@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { I18nextProvider, useTranslation } from 'react-i18next';
 import { ActivityIndicator, View } from 'react-native';
 
@@ -15,7 +15,7 @@ type LanguageContextValue = {
 
 const LanguageContext = createContext<LanguageContextValue | undefined>(undefined);
 
-const LanguageContextBridge = ({ children }: { children: React.ReactNode }) => {
+const LanguageContextBridge = ({ children }: { children: ReactNode }) => {
   const { i18n: i18nInstance } = useTranslation();
   const [isReady, setIsReady] = useState(false); // ✨ NEW: Halts app until language loads
 
@@ -133,7 +133,7 @@ const LanguageContextBridge = ({ children }: { children: React.ReactNode }) => {
   );
 };
 
-export const LanguageProvider = ({ children }: { children: React.ReactNode }) => (
+export const LanguageProvider = ({ children }: { children: ReactNode }) => (
   <I18nextProvider i18n={i18n}>
     <LanguageContextBridge>{children}</LanguageContextBridge>
   </I18nextProvider>

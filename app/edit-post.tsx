@@ -1,15 +1,28 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Image, Platform } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Image, Platform, Animated } from 'react-native';
 import { supabase } from '../supabase'; 
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { decode } from 'base64-arraybuffer';
 import { Ionicons } from '@expo/vector-icons';
-// ✨ NEW: Import Toast
 import Toast from 'react-native-toast-message';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { useTheme } from '../context/ThemeContext'; 
+
+const Skeleton = ({ width, height, style, borderRadius = 8, isDark = false }: { width?: any, height: any, style?: any, borderRadius?: number, isDark?: boolean }) => {
+  const fadeAnim = useRef(new Animated.Value(0.5)).current;
+  useEffect(() => {
+    Animated.loop(Animated.sequence([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+      Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
+    ])).start();
+  }, [fadeAnim]);
+  return <Animated.View style={[{ width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, style]} />;
+};
 
 export default function EditPost() {
   const router = useRouter();
+  const { colors, isDark } = useTheme();
   const { id: rawListingId } = useLocalSearchParams<{ id?: string | string[] }>();
   const listingId = Array.isArray(rawListingId) ? rawListingId[0] : rawListingId;
 
@@ -38,9 +51,23 @@ export default function EditPost() {
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [4, 3], quality: 0.5, base64: true,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images, 
+      allowsEditing: true, 
+      aspect: [4, 3], 
+      quality: 1,
+      base64: false, 
     });
-    if (!result.canceled) { setImageUri(result.assets[0].uri); setImageBase64(result.assets[0].base64 || null); }
+    
+    if (!result.canceled) { 
+      const compressedImage = await ImageManipulator.manipulateAsync(
+        result.assets[0].uri,
+        [{ resize: { width: 1080 } }], 
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+      );
+      
+      setImageUri(compressedImage.uri); 
+      setImageBase64(compressedImage.base64 || null); 
+    }
   };
 
   const updateAd = async () => {
@@ -58,10 +85,15 @@ export default function EditPost() {
         uploadedImageUrl = supabase.storage.from('listing_images').getPublicUrl(fileName).data.publicUrl;
       }
       const { error: dbError } = await supabase.from('listings').update({
-        title, price: parseFloat(price), category, location, description, image_urls: uploadedImageUrl ? [uploadedImageUrl] : [], 
+        title, 
+        price: parseFloat(price), 
+        location, 
+        description, 
+        image_urls: uploadedImageUrl ? [uploadedImageUrl] : [], 
       }).eq('id', listingId);
-      if (dbError) throw dbError;
-      
+
+      if (dbError) throw dbError; 
+
       Toast.show({ type: 'success', text1: 'Success!', text2: 'Your ad has been updated.', position: 'top' });
       router.back();
     } catch (error: any) {
@@ -71,51 +103,98 @@ export default function EditPost() {
     }
   };
 
-  if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#000" /></View>;
+  if (loading) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color={colors.text} /></TouchableOpacity>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>Edit Ad</Text>
+          <View style={{ width: 28 }} />
+        </View>
+        <Skeleton width="100%" height={200} borderRadius={12} style={{ marginBottom: 24 }} isDark={isDark} />
+        <Skeleton width={80} height={16} style={{ marginBottom: 8 }} isDark={isDark} />
+        <Skeleton width="100%" height={56} borderRadius={12} style={{ marginBottom: 20 }} isDark={isDark} />
+        <Skeleton width={80} height={16} style={{ marginBottom: 8 }} isDark={isDark} />
+        <Skeleton width="100%" height={56} borderRadius={12} style={{ marginBottom: 20 }} isDark={isDark} />
+      </View>
+    );
+  }
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color="#000" /></TouchableOpacity>
-        <Text style={styles.headerTitle}>Edit Ad</Text>
+        <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color={colors.text} /></TouchableOpacity>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>Edit Ad</Text>
         <View style={{ width: 28 }} />
       </View>
 
-      <TouchableOpacity style={styles.imagePickerButton} onPress={pickImage}>
-        {imageUri ? <Image source={{ uri: imageUri }} style={styles.imagePreview} /> : <Text style={styles.imagePickerText}>+ Update Photo</Text>}
+      <Text style={[styles.label, { color: colors.text }]}>Photo</Text>
+      <TouchableOpacity style={[styles.imagePickerButton, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]} onPress={pickImage}>
+        {imageUri ? (
+          <Image source={{ uri: imageUri }} style={styles.imagePreview} />
+        ) : (
+          <Text style={[styles.imagePickerText, { color: colors.textSecondary }]}>Tap to update photo</Text>
+        )}
       </TouchableOpacity>
 
-      <Text style={styles.label}>Ad Title</Text><TextInput style={styles.input} value={title} onChangeText={setTitle} />
-      <Text style={styles.label}>Price (₹)</Text><TextInput style={styles.input} keyboardType="numeric" value={price} onChangeText={setPrice} />
-      <Text style={styles.label}>Category</Text><TextInput style={styles.input} value={category} onChangeText={setCategory} />
-      <Text style={styles.label}>Location</Text><TextInput style={styles.input} value={location} onChangeText={setLocation} />
-      <Text style={styles.label}>Description</Text>
-      <TextInput style={[styles.input, styles.textArea]} multiline numberOfLines={4} value={description} onChangeText={setDescription} />
+      <Text style={[styles.label, { color: colors.text }]}>Title</Text>
+      <TextInput 
+        style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]} 
+        value={title} 
+        onChangeText={setTitle} 
+        placeholderTextColor={colors.textSecondary} 
+      />
 
-      <TouchableOpacity style={styles.button} onPress={updateAd} disabled={saving}>
-        {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Save Changes</Text>}
+      <Text style={[styles.label, { color: colors.text }]}>Price (₹)</Text>
+      <TextInput 
+        style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]} 
+        value={price} 
+        onChangeText={setPrice} 
+        keyboardType="numeric" 
+        placeholderTextColor={colors.textSecondary} 
+      />
+
+      <Text style={[styles.label, { color: colors.text }]}>Location</Text>
+      <TextInput 
+        style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]} 
+        value={location} 
+        onChangeText={setLocation} 
+        placeholderTextColor={colors.textSecondary} 
+      />
+
+      <Text style={[styles.label, { color: colors.text }]}>Description</Text>
+      <TextInput 
+        style={[styles.input, styles.textArea, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]} 
+        value={description} 
+        onChangeText={setDescription} 
+        multiline 
+        placeholderTextColor={colors.textSecondary} 
+      />
+
+      <TouchableOpacity style={[styles.button, { backgroundColor: colors.tint }]} onPress={updateAd} disabled={saving}>
+        {saving ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.buttonText, { color: isDark ? '#000' : '#fff' }]}>Save Changes</Text>}
       </TouchableOpacity>
-      
-      <TouchableOpacity onPress={() => router.back()} style={styles.cancelButton}>
-        <Text style={styles.cancelText}>Cancel</Text>
+
+      <TouchableOpacity style={styles.cancelButton} onPress={() => router.back()}>
+        <Text style={[styles.cancelText, { color: colors.textSecondary }]}>Cancel</Text>
       </TouchableOpacity>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', padding: 24 },
+  container: { flex: 1, padding: 24 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 30, marginBottom: 24 },
   headerTitle: { fontSize: 24, fontWeight: 'bold' },
-  imagePickerButton: { height: 200, backgroundColor: '#f9f9f9', borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginBottom: 24, overflow: 'hidden', borderWidth: 1, borderColor: '#ddd', borderStyle: 'dashed' },
-  imagePickerText: { fontSize: 16, color: '#666', fontWeight: 'bold' },
+  imagePickerButton: { height: 200, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginBottom: 24, overflow: 'hidden', borderWidth: 1, borderStyle: 'dashed' },
+  imagePickerText: { fontSize: 16, fontWeight: 'bold' },
   imagePreview: { width: '100%', height: '100%' },
-  label: { fontSize: 16, fontWeight: '600', marginBottom: 8, color: '#333' },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 20, backgroundColor: '#f9f9f9' },
+  label: { fontSize: 16, fontWeight: '600', marginBottom: 8 },
+  input: { borderWidth: 1, borderRadius: 12, padding: 16, fontSize: 16, marginBottom: 20 },
   textArea: { height: 100, textAlignVertical: 'top' },
-  button: { backgroundColor: '#000', padding: 18, borderRadius: 12, alignItems: 'center', marginTop: 10 },
-  buttonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  button: { padding: 18, borderRadius: 12, alignItems: 'center', marginTop: 10 },
+  buttonText: { fontSize: 18, fontWeight: 'bold' },
   cancelButton: { padding: 16, alignItems: 'center', marginTop: 10, marginBottom: 40 },
-  cancelText: { color: '#666', fontSize: 16 },
+  cancelText: { fontSize: 16 },
 });

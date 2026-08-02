@@ -5,11 +5,17 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "boltzyapp",
+    "scheme": "boltzy",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Boltzy needs access to your camera so you can take photos of items you want to sell.",
+        "NSPhotoLibraryUsageDescription": "Boltzy needs access to your photo library to upload images for your listings.",
+        "NSLocationWhenInUseUsageDescription": "Boltzy uses your location to show you items for sale nearby.",
+        "NSContactsUsageDescription": "Boltzy requires contacts access so you can easily share contact info in chats."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -20,10 +26,18 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.imam_khan.boltzyapp"
+      "package": "com.imam_khan.boltzyapp",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.READ_CONTACTS"
+      ]
     },
     "web": {
-      "output": "static",
+      "output": "single",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
@@ -44,7 +58,9 @@
       "expo-web-browser",
       "expo-font",
       "expo-image",
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-secure-store",
+      "expo-speech-recognition"
     ],
     "experiments": {
       "typedRoutes": true,

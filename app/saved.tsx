@@ -1,21 +1,34 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View, Image, Alert } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View, Image, Alert, Animated, useWindowDimensions } from 'react-native';
 import { supabase } from '../supabase';
 import { getCurrentUser } from '../utils/auth';
-import { useLanguage } from '../context/LanguageContext'; // ✨ IMPORT TRANSLATOR
+import { useLanguage } from '../context/LanguageContext';
+import { useTheme } from '../context/ThemeContext';
+
+const Skeleton = ({ width, height, style, borderRadius = 8, isDark = false }: { width?: any, height: any, style?: any, borderRadius?: number, isDark?: boolean }) => {
+  const fadeAnim = useRef(new Animated.Value(0.5)).current;
+  useEffect(() => {
+    Animated.loop(Animated.sequence([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+      Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
+    ])).start();
+  }, [fadeAnim]);
+  return <Animated.View style={[{ width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, style]} />;
+};
 
 export default function SavedItems() {
   const router = useRouter();
-  const { t, translateUGC } = useLanguage(); // ✨ ACTIVATE TRANSLATOR
+  const { width } = useWindowDimensions();
+  const { t, translateUGC } = useLanguage();
+  const { colors, isDark } = useTheme();
 
   const [savedListings, setSavedListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
 
-  useEffect(() => {
-    fetchSavedListings();
-  }, []);
+  useEffect(() => { fetchSavedListings(); }, []);
 
   const fetchSavedListings = async () => {
     setLoading(true);
@@ -24,10 +37,7 @@ export default function SavedItems() {
 
     const { data, error } = await supabase
       .from('wishlist')
-      .select(`
-        listing_id,
-        listings (*)
-      `)
+      .select(`listing_id, listings (*)`)
       .eq('user_id', user.id);
 
     if (!error && data) {
@@ -37,11 +47,10 @@ export default function SavedItems() {
     setLoading(false);
   };
 
-  const removeFromSaved = async (listingId: string) => {
+  const toggleSaved = async (listingId: string) => {
     const user = await getCurrentUser();
     if (!user) return;
 
-    // Optimistic Update: Remove from UI immediately
     setSavedListings(prev => prev.filter(item => item.id !== listingId));
 
     const { error } = await supabase
@@ -50,79 +59,99 @@ export default function SavedItems() {
       .match({ user_id: user.id, listing_id: listingId });
 
     if (error) {
-      Alert.alert(t('common_error') || "Error", "Could not remove item.");
-      fetchSavedListings(); // Rollback/Refresh if it failed
+      Alert.alert(t('common_error') || "Error", "Could not update saved items.");
+      fetchSavedListings(); 
     }
   };
 
   const renderItem = ({ item }: { item: any }) => {
     const imageUrl = item.image_urls && item.image_urls.length > 0 ? item.image_urls[0] : null;
+    const isGrid = viewMode === 'grid';
 
     return (
       <TouchableOpacity 
-        style={styles.card} 
+        style={[
+          styles.card, 
+          { backgroundColor: colors.card, borderColor: colors.border },
+          isGrid && styles.cardGrid
+        ]} 
         onPress={() => router.push(('/listing/' + item.id) as any)}
+        activeOpacity={0.8}
       >
         {imageUrl ? (
-          <Image source={{ uri: imageUrl }} style={styles.image} />
+          <Image source={{ uri: imageUrl }} style={[styles.image, isGrid && styles.imageGrid]} />
         ) : (
-          <View style={[styles.image, { backgroundColor: '#eee' }]} />
+          <View style={[styles.image, isGrid && styles.imageGrid, { backgroundColor: colors.backgroundSecondary }]} />
         )}
         
         <View style={styles.cardContent}>
           <View style={styles.cardHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.price}>₹{item.price}</Text>
-              {/* ✨ TRANSLATE DYNAMIC AD TITLE ✨ */}
-              <Text style={styles.title} numberOfLines={1}>{translateUGC(item.title)}</Text>
+              <Text style={[styles.price, { color: colors.text }]}>₹{item.price}</Text>
+              <Text style={[styles.title, { color: colors.textSecondary }]} numberOfLines={1}>{translateUGC(item.title)}</Text>
             </View>
-            
-            {/* --- TRASH BUTTON --- */}
-            <TouchableOpacity 
-              onPress={() => removeFromSaved(item.id)}
-              style={styles.deleteBtn}
-            >
-              <Ionicons name="trash-outline" size={22} color="#FF3B30" />
+            <TouchableOpacity onPress={() => toggleSaved(item.id)} style={styles.heartBtn} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+              <Ionicons name="heart" size={24} color="#FF3B30" />
             </TouchableOpacity>
           </View>
-          
-          {/* ✨ TRANSLATE DYNAMIC LOCATION ✨ */}
-          <Text style={styles.location}>{translateUGC(item.location)}</Text>
+          <Text style={[styles.location, { color: colors.textSecondary }]} numberOfLines={1}>{translateUGC(item.location)}</Text>
         </View>
       </TouchableOpacity>
     );
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
         <TouchableOpacity onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={28} color="#000" />
+          <Ionicons name="arrow-back" size={28} color={colors.text} />
         </TouchableOpacity>
-        {/* ✨ TRANSLATE HEADER ✨ */}
-        <Text style={styles.headerTitle}>{t('saved_title')}</Text>
-        <View style={{ width: 28 }} />
+        <Text style={[styles.headerTitle, { color: colors.text }]}>{t('saved_title') || 'Saved Ads'}</Text>
+        <TouchableOpacity onPress={() => setViewMode(prev => prev === 'list' ? 'grid' : 'list')} style={{ padding: 4 }}>
+          <Ionicons name={viewMode === 'list' ? 'grid' : 'list'} size={24} color={colors.text} />
+        </TouchableOpacity>
       </View>
 
       {loading ? (
-        <ActivityIndicator size="large" color="#000" style={{ marginTop: 50 }} />
+        <FlatList
+          key={viewMode}
+          numColumns={viewMode === 'grid' ? 2 : 1}
+          data={[1, 2, 3, 4, 5, 6]}
+          keyExtractor={(item) => String(item)}
+          contentContainerStyle={styles.listContainer}
+          columnWrapperStyle={viewMode === 'grid' ? { gap: 12 } : undefined}
+          renderItem={() => (
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }, viewMode === 'grid' && styles.cardGrid]}>
+              <Skeleton width={viewMode === 'grid' ? '100%' : 110} height={110} borderRadius={0} isDark={isDark} />
+              <View style={styles.cardContent}>
+                <View style={styles.cardHeader}>
+                  <View style={{ flex: 1, gap: 6 }}>
+                    <Skeleton width={80} height={20} isDark={isDark} />
+                    <Skeleton width={viewMode === 'grid' ? 100 : 140} height={16} isDark={isDark} />
+                  </View>
+                  <Skeleton width={24} height={24} borderRadius={12} isDark={isDark} />
+                </View>
+              </View>
+            </View>
+          )}
+        />
       ) : savedListings.length === 0 ? (
         <View style={styles.emptyState}>
-          <Ionicons name="heart-outline" size={80} color="#ccc" />
-          {/* ✨ TRANSLATE EMPTY STATE ✨ */}
-          <Text style={styles.emptyText}>{t('saved_empty')}</Text>
-          <TouchableOpacity style={styles.browseBtn} onPress={() => router.push('/home' as any)}>
-            <Text style={styles.browseBtnText}>{t('saved_browse')}</Text>
-          </TouchableOpacity>
+          <Ionicons name="heart-outline" size={80} color={colors.textSecondary} />
+          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>{t('saved_empty') || 'No saved items yet'}</Text>
         </View>
       ) : (
         <FlatList
+          key={viewMode}
+          numColumns={viewMode === 'grid' ? 2 : 1}
           data={savedListings}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           contentContainerStyle={styles.listContainer}
+          columnWrapperStyle={viewMode === 'grid' ? { gap: 12 } : undefined}
           onRefresh={fetchSavedListings}
           refreshing={loading}
+          showsVerticalScrollIndicator={false}
         />
       )}
     </View>
@@ -130,36 +159,20 @@ export default function SavedItems() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    padding: 20, 
-    paddingTop: 60, 
-    backgroundColor: '#fff', 
-    borderBottomWidth: 1, 
-    borderBottomColor: '#eee' 
-  },
+  container: { flex: 1 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 60, borderBottomWidth: 1 },
   headerTitle: { fontSize: 20, fontWeight: 'bold' },
   listContainer: { padding: 16 },
-  card: { 
-    backgroundColor: '#fff', 
-    borderRadius: 12, 
-    marginBottom: 16, 
-    overflow: 'hidden', 
-    elevation: 2, 
-    flexDirection: 'row' 
-  },
-  image: { width: 110, height: 110 },
+  card: { borderRadius: 12, marginBottom: 16, overflow: 'hidden', borderWidth: 1, flexDirection: 'row' },
+  cardGrid: { flexDirection: 'column', flex: 1, maxWidth: '48%', marginBottom: 12 },
+  image: { width: 120, height: 120 },
+  imageGrid: { width: '100%', height: 140 },
   cardContent: { padding: 12, flex: 1, justifyContent: 'center' },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  price: { fontSize: 18, fontWeight: 'bold', color: '#000' },
-  title: { fontSize: 15, color: '#444', marginTop: 2 },
-  location: { fontSize: 13, color: '#888', marginTop: 4 },
-  deleteBtn: { padding: 4 },
+  price: { fontSize: 18, fontWeight: 'bold' },
+  title: { fontSize: 14, marginTop: 2 },
+  location: { fontSize: 12, marginTop: 8 },
+  heartBtn: { paddingLeft: 8 },
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
-  emptyText: { fontSize: 16, color: '#666', marginTop: 16 },
-  browseBtn: { marginTop: 20, backgroundColor: '#000', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
-  browseBtnText: { color: '#fff', fontWeight: 'bold' }
+  emptyText: { fontSize: 16, marginTop: 16 },
 });

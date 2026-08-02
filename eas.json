@@ -9,7 +9,13 @@
       "distribution": "internal"
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_HCAPTCHA_SITE_KEY": "20d2638a-d81a-4810-9df4-4daaaad69c00"
+      }
     },
     "production": {
       "autoIncrement": true

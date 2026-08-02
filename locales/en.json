@@ -281,5 +281,10 @@
 "star_chat": "Star & Tag Chat",
 "unstar_chat": "Remove Star",
 "enter_tag": "Enter a nickname or tag...",
-"save_tag": "Save Tag"
+"save_tag": "Save Tag",
+"lang_title": "Change Language",
+"confirm_lang_change": "Are you sure you want to change the app language?",
+"Confirm": "Confirm",
+"active_ads": "Active Ads",
+"user_reviews": "User Reviews"
 }
