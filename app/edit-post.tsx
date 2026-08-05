@@ -1,30 +1,23 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Image, Platform, Animated } from 'react-native';
-import { supabase } from '../supabase'; 
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
-import { decode } from 'base64-arraybuffer';
 import { Ionicons } from '@expo/vector-icons';
-import Toast from 'react-native-toast-message';
+import { decode } from 'base64-arraybuffer';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { useTheme } from '../context/ThemeContext'; 
-
-const Skeleton = ({ width, height, style, borderRadius = 8, isDark = false }: { width?: any, height: any, style?: any, borderRadius?: number, isDark?: boolean }) => {
-  const fadeAnim = useRef(new Animated.Value(0.5)).current;
-  useEffect(() => {
-    Animated.loop(Animated.sequence([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
-    ])).start();
-  }, [fadeAnim]);
-  return <Animated.View style={[{ width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, style]} />;
-};
+import * as ImagePicker from 'expo-image-picker';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import Toast from 'react-native-toast-message';
+import { useTheme } from '../context/ThemeContext';
+import { supabase } from '../supabase';
+import { Skeleton } from '../components/ShimmerSkeleton';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function EditPost() {
   const router = useRouter();
-  const { colors, isDark } = useTheme();
+ const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
   const { id: rawListingId } = useLocalSearchParams<{ id?: string | string[] }>();
   const listingId = Array.isArray(rawListingId) ? rawListingId[0] : rawListingId;
+
+const insets = useSafeAreaInsets();
 
   const [title, setTitle] = useState('');
   const [price, setPrice] = useState('');
@@ -106,16 +99,16 @@ export default function EditPost() {
   if (loading) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
           <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color={colors.text} /></TouchableOpacity>
           <Text style={[styles.headerTitle, { color: colors.text }]}>Edit Ad</Text>
           <View style={{ width: 28 }} />
         </View>
-        <Skeleton width="100%" height={200} borderRadius={12} style={{ marginBottom: 24 }} isDark={isDark} />
-        <Skeleton width={80} height={16} style={{ marginBottom: 8 }} isDark={isDark} />
-        <Skeleton width="100%" height={56} borderRadius={12} style={{ marginBottom: 20 }} isDark={isDark} />
-        <Skeleton width={80} height={16} style={{ marginBottom: 8 }} isDark={isDark} />
-        <Skeleton width="100%" height={56} borderRadius={12} style={{ marginBottom: 20 }} isDark={isDark} />
+        <Skeleton width="100%" height={200} borderRadius={12} style={{ marginBottom: 24 }} />
+        <Skeleton width={80} height={16} style={{ marginBottom: 8 }} />
+        <Skeleton width="100%" height={56} borderRadius={12} style={{ marginBottom: 20 }} />
+        <Skeleton width={80} height={16} style={{ marginBottom: 8 }} />
+        <Skeleton width="100%" height={56} borderRadius={12} style={{ marginBottom: 20 }} />
       </View>
     );
   }
@@ -185,7 +178,7 @@ export default function EditPost() {
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 24 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 30, marginBottom: 24 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
   headerTitle: { fontSize: 24, fontWeight: 'bold' },
   imagePickerButton: { height: 200, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginBottom: 24, overflow: 'hidden', borderWidth: 1, borderStyle: 'dashed' },
   imagePickerText: { fontSize: 16, fontWeight: 'bold' },

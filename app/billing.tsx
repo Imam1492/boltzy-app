@@ -1,28 +1,22 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, SafeAreaView, ActivityIndicator, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useLanguage } from '../context/LanguageContext';
-import { getCurrentUser } from '../utils/auth';
-import { supabase } from '../supabase'; 
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Toast from 'react-native-toast-message';
-import { useTheme } from '../context/ThemeContext'; 
+import { useLanguage } from '../context/LanguageContext';
+import { useTheme } from '../context/ThemeContext';
+import { supabase } from '../supabase';
+import { getCurrentUser } from '../utils/auth';
+import { Skeleton } from '../components/ShimmerSkeleton';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const Skeleton = ({ width, height, style, borderRadius = 8, isDark = false }: { width?: any, height: any, style?: any, borderRadius?: number, isDark?: boolean }) => {
-  const fadeAnim = useRef(new Animated.Value(0.5)).current;
-  useEffect(() => {
-    Animated.loop(Animated.sequence([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
-    ])).start();
-  }, [fadeAnim]);
-  return <Animated.View style={[{ width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, style]} />;
-};
+
 
 export default function BillingScreen() {
   const router = useRouter();
   const { t } = useLanguage();
-  const { colors, isDark } = useTheme();
+ const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
+ const insets = useSafeAreaInsets();
 
   const [loading, setLoading] = useState(false); 
   const [pageLoading, setPageLoading] = useState(true); 
@@ -139,7 +133,7 @@ export default function BillingScreen() {
   if (pageLoading) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-        <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+        <View style={[styles.header, { backgroundColor: colors.card, paddingTop: insets.top + 10 }]}>
           <TouchableOpacity onPress={() => router.back()} style={{ padding: 4 }}>
             <Ionicons name="arrow-back" size={28} color={colors.text} />
           </TouchableOpacity>
@@ -147,26 +141,26 @@ export default function BillingScreen() {
           <View style={{ width: 36 }} />
         </View>
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          <Skeleton width="100%" height={90} borderRadius={16} style={{ marginBottom: 24 }} isDark={isDark} />
-          <Skeleton width={150} height={20} style={{ marginBottom: 16 }} isDark={isDark} />
+          <Skeleton width="100%" height={90} borderRadius={16} style={{ marginBottom: 24 }} />
+          <Skeleton width={150} height={20} style={{ marginBottom: 16 }} />
           <View style={[styles.planCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 }}>
-              <Skeleton width={120} height={24} isDark={isDark} />
-              <Skeleton width={80} height={28} isDark={isDark} />
+              <Skeleton width={120} height={24} />
+              <Skeleton width={80} height={28} />
             </View>
-            <Skeleton width="90%" height={16} style={{ marginBottom: 12 }} isDark={isDark} />
-            <Skeleton width="80%" height={16} style={{ marginBottom: 12 }} isDark={isDark} />
-            <Skeleton width="70%" height={16} style={{ marginBottom: 24 }} isDark={isDark} />
-            <Skeleton width="100%" height={56} borderRadius={12} isDark={isDark} />
+            <Skeleton width="90%" height={16} style={{ marginBottom: 12 }} />
+            <Skeleton width="80%" height={16} style={{ marginBottom: 12 }} />
+            <Skeleton width="70%" height={16} style={{ marginBottom: 24 }} />
+            <Skeleton width="100%" height={56} borderRadius={12} />
           </View>
           <View style={[styles.planCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 }}>
-              <Skeleton width={140} height={20} isDark={isDark} />
-              <Skeleton width={80} height={24} isDark={isDark} />
+              <Skeleton width={140} height={20} />
+              <Skeleton width={80} height={24} />
             </View>
-            <Skeleton width="100%" height={14} style={{ marginBottom: 6 }} isDark={isDark} />
-            <Skeleton width="85%" height={14} style={{ marginBottom: 20 }} isDark={isDark} />
-            <Skeleton width="100%" height={56} borderRadius={12} isDark={isDark} />
+            <Skeleton width="100%" height={14} style={{ marginBottom: 6 }} />
+            <Skeleton width="85%" height={14} style={{ marginBottom: 20 }} />
+            <Skeleton width="100%" height={56} borderRadius={12} />
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -175,7 +169,7 @@ export default function BillingScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border, paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => router.back()} style={{ padding: 4 }}>
           <Ionicons name="arrow-back" size={28} color={colors.text} />
         </TouchableOpacity>
@@ -291,7 +285,7 @@ export default function BillingScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: Platform.OS === 'ios' ? 20 : 40, borderBottomWidth: 1 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1 },
   headerTitle: { fontSize: 20, fontWeight: 'bold' },
   scrollContent: { padding: 20, paddingBottom: 60 },
   usageBanner: { padding: 16, borderRadius: 16, marginBottom: 24, borderWidth: 1 },

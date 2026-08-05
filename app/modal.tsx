@@ -3,7 +3,7 @@
 // import { useTheme } from '../context/ThemeContext'; 
 
 // export default function ModalScreen() {
-//   const { colors, isDark } = useTheme();
+//  const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
 
 //   return (
 //     <View style={[styles.container, { backgroundColor: colors.background }]}>

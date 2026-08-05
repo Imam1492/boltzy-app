@@ -1,24 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState, useRef } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, ScrollView, Animated } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import Toast from 'react-native-toast-message';
+import ConfirmModal from '../components/ConfirmModal';
+import { useLanguage } from '../context/LanguageContext';
+import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../supabase';
 import { getCurrentUser } from '../utils/auth';
-import { useLanguage } from '../context/LanguageContext'; 
-import { useTheme } from '../context/ThemeContext';
-import ConfirmModal from '../components/ConfirmModal';
-import Toast from 'react-native-toast-message';
+import { Skeleton } from '../components/ShimmerSkeleton';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const Skeleton = ({ width, height, style, borderRadius = 8, isDark = false }: { width?: any, height: any, style?: any, borderRadius?: number, isDark?: boolean }) => {
-  const fadeAnim = useRef(new Animated.Value(0.5)).current;
-  useEffect(() => {
-    Animated.loop(Animated.sequence([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
-    ])).start();
-  }, [fadeAnim]);
-  return <Animated.View style={[{ width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, style]} />;
-};
+
 
 const LANGUAGE_OPTIONS = [
   { id: 'en', nativeLabel: 'English' },
@@ -46,7 +39,10 @@ const getInitials = (name?: string) => {
 export default function EditProfile() {
   const router = useRouter();
   const { lang, setLang, t } = useLanguage();
-  const { colors, isDark } = useTheme();
+ const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
+
+ // ✨ ADD THIS LINE
+  const insets = useSafeAreaInsets();
   
   const [displayName, setDisplayName] = useState('');
   const [realName, setRealName] = useState('');
@@ -113,7 +109,7 @@ export default function EditProfile() {
   };
 
   const handleSave = async () => {
-    if (!displayName.trim() || !realName.trim() || !username.trim()) {
+    if (!realName.trim() || !username.trim()) {
       Toast.show({ type: 'error', text1: 'Missing Info', text2: 'All fields are required.', position: 'top' });
       return;
     }
@@ -123,7 +119,9 @@ export default function EditProfile() {
     if (!user) return;
 
     const cleanUsername = username.trim().toLowerCase().replace(/[^a-z0-9_.]/g, '');
-    let updates: any = { display_name: displayName, real_name: realName };
+    
+    // ✨ Syncing real_name and display_name into one seamless identity
+    let updates: any = { display_name: realName, real_name: realName };
 
     if (cleanUsername !== initialUsername) {
       if (lastUsernameChange) {
@@ -153,7 +151,6 @@ export default function EditProfile() {
     }
 
     const { error } = await supabase.from('profiles').update(updates).eq('id', user.id);
-    
     setSaving(false);
     
     if (error) {
@@ -165,50 +162,66 @@ export default function EditProfile() {
     }
   };
 
+  const handleLogout = () => {
+    triggerConfirm('Logout', 'Are you sure you want to logout of Boltzy?', true, async () => { 
+      await supabase.auth.signOut(); 
+      router.replace('/'); 
+    });
+  };
+
+  const handleLogoutAllDevices = () => {
+    triggerConfirm('Logout All Devices', 'Are you sure you want to log out from every device you are currently logged into?', true, async () => { 
+      await supabase.auth.signOut({ scope: 'global' }); 
+      router.replace('/'); 
+    });
+  };
+
   if (loading) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+        <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border, paddingTop: insets.top + 10 }]}>
           <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color={colors.text} /></TouchableOpacity>
           <Text style={[styles.headerTitle, { color: colors.text }]}>{t('profile_title')}</Text>
           <View style={{ width: 28 }} />
         </View>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.avatarContainer}>
-            <Skeleton width={100} height={100} borderRadius={50} isDark={isDark} />
+            <Skeleton width={100} height={100} borderRadius={50} />
           </View>
           <View style={[styles.highlightBox, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
-            <Skeleton width={100} height={16} style={{ marginBottom: 16 }} isDark={isDark} />
+            <Skeleton width={100} height={16} style={{ marginBottom: 16 }} />
             <View style={styles.languageContainer}>
-              {[1, 2, 3, 4, 5, 6].map(i => <Skeleton key={i} width={70} height={36} borderRadius={20} isDark={isDark} />)}
+              {[1, 2, 3, 4, 5, 6].map(i => <Skeleton key={i} width={70} height={36} borderRadius={20} />)}
             </View>
           </View>
-          <Skeleton width={80} height={16} style={{ marginBottom: 8 }} isDark={isDark} />
-          <Skeleton width="100%" height={56} borderRadius={12} style={{ marginBottom: 15 }} isDark={isDark} />
-          <Skeleton width={80} height={16} style={{ marginBottom: 8 }} isDark={isDark} />
-          <Skeleton width="100%" height={56} borderRadius={12} style={{ marginBottom: 15 }} isDark={isDark} />
+          <Skeleton width={80} height={16} style={{ marginBottom: 8 }} />
+          <Skeleton width="100%" height={56} borderRadius={12} style={{ marginBottom: 15 }} />
+          <Skeleton width={80} height={16} style={{ marginBottom: 8 }} />
+          <Skeleton width="100%" height={56} borderRadius={12} style={{ marginBottom: 15 }} />
         </ScrollView>
       </View>
     );
   }
 
-  return (
+return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-        <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color={colors.text} /></TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: colors.text }]}>{t('profile_title')}</Text>
+      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border, paddingTop: insets.top + 10 }]}>
+        <TouchableOpacity onPress={() => router.push('/home?openProfile=true' as any)}>
+          <Ionicons name="arrow-back" size={28} color={colors.text} />
+        </TouchableOpacity>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>{t('profile_title') || 'Edit Profile'}</Text>
         <View style={{ width: 28 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]} showsVerticalScrollIndicator={false}>
         <View style={styles.avatarContainer}>
           <View style={[styles.avatarCircle, { borderColor: colors.card }]}>
-            <Text style={styles.avatarText}>{getInitials(realName || displayName || 'User')}</Text>
+            <Text style={styles.avatarText}>{getInitials(realName || 'User')}</Text>
           </View>
         </View>
 
         <View style={[styles.highlightBox, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
-          <Text style={[styles.label, { color: colors.text, marginTop: 0 }]}>{t('app_language')}</Text>
+          <Text style={[styles.label, { color: colors.text, marginTop: 0 }]}>{t('app_language') || 'App Language'}</Text>
           <View style={styles.languageContainer}>
             {LANGUAGE_OPTIONS.map((l) => (
               <TouchableOpacity
@@ -232,7 +245,7 @@ export default function EditProfile() {
           </View>
         </View>
 
-        <Text style={[styles.label, { color: colors.text }]}>{t('real_name')}</Text>
+        <Text style={[styles.label, { color: colors.text }]}>{t('real_name') || 'Name'}</Text>
         <TextInput 
           style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]} 
           value={realName} 
@@ -251,15 +264,8 @@ export default function EditProfile() {
           autoCorrect={false}
         />
 
-        <Text style={[styles.label, { color: colors.text }]}>{t('pub_user')}</Text>
-        <TextInput 
-          style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]} 
-          value={displayName} 
-          onChangeText={setDisplayName} 
-        />
-
         <TouchableOpacity style={[styles.saveButton, { backgroundColor: colors.tint }]} onPress={handleSave} disabled={saving}>
-          {saving ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.saveButtonText, { color: isDark ? '#000' : '#fff' }]}>{t('save_btn')}</Text>}
+          {saving ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.saveButtonText, { color: isDark ? '#000' : '#fff' }]}>{t('save_btn') || 'Save Changes'}</Text>}
         </TouchableOpacity>
 
         {isAdmin && (
@@ -287,10 +293,21 @@ export default function EditProfile() {
         )}
       
         <View style={[styles.dangerZone, { borderTopColor: colors.border }]}>
-          <Text style={styles.dangerTitle}>{t('danger')}</Text>
-          <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteAccount}>
-            <Ionicons name="trash-outline" size={20} color="#FF3B30" />
-            <Text style={styles.deleteButtonText}>{t('delete_acc')}</Text>
+          <Text style={styles.dangerTitle}>{t('danger') || 'Danger Zone'}</Text>
+          
+          <TouchableOpacity onPress={handleLogout} style={styles.dangerBtn}>
+            <Ionicons color="#FF3B30" name="log-out-outline" size={20}/>
+            <Text style={styles.dangerBtnText}>{t('logout') || 'Logout'}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={handleLogoutAllDevices} style={styles.dangerBtn}>
+            <Ionicons color="#FF3B30" name="desktop-outline" size={20}/>
+            <Text style={styles.dangerBtnText}>{t('logout_all') || 'Logout from All Devices'}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={handleDeleteAccount} style={[styles.dangerBtn, { borderBottomWidth: 0 }]}>
+            <Ionicons color="#FF3B30" name="trash-outline" size={20}/>
+            <Text style={styles.dangerBtnText}>{t('delete_acc') || 'Delete Account'}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -312,7 +329,7 @@ export default function EditProfile() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 60, borderBottomWidth: 1 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1 },
   headerTitle: { fontSize: 20, fontWeight: 'bold' },
   content: { padding: 24 },
   avatarContainer: { alignSelf: 'center', marginBottom: 20 },
@@ -332,7 +349,7 @@ const styles = StyleSheet.create({
   adminBtn: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 12, marginBottom: 10 },
   adminBtnText: { fontSize: 16, fontWeight: '600', flex: 1 },
   dangerZone: { marginTop: 40, paddingTop: 20, borderTopWidth: 1 },
-  dangerTitle: { fontSize: 14, fontWeight: '700', color: '#FF3B30', marginBottom: 12, textTransform: 'uppercase' },
-  deleteButton: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  deleteButtonText: { color: '#FF3B30', fontSize: 16, fontWeight: '600' }
+  dangerTitle: { fontSize: 14, fontWeight: '700', color: '#FF3B30', marginBottom: 16, textTransform: 'uppercase' },
+  dangerBtn: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: 'rgba(150,150,150,0.2)' },
+  dangerBtnText: { color: '#FF3B30', fontSize: 16, fontWeight: '600' }
 });

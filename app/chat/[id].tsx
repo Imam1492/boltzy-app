@@ -1,22 +1,31 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  View, Text, TextInput, FlatList, TouchableOpacity,
-  KeyboardAvoidingView, Platform, StyleSheet, ActivityIndicator,
-  Modal, Alert, Animated, Image, TouchableWithoutFeedback, Dimensions, PanResponder,
-} from 'react-native';
-import { useTranslation } from 'react-i18next';
-import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
-import { supabase } from '../../supabase';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import * as Location from 'expo-location';
 import * as Contacts from 'expo-contacts/legacy';
-import * as Linking from 'expo-linking';
-import { getCurrentUser } from '../../utils/auth';
-import { useLanguage } from '../../context/LanguageContext';
-import { getLocalizedListingField, getLocalizedMessageContent } from '../../utils/localizedContent';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as ImagePicker from 'expo-image-picker';
+import * as Linking from 'expo-linking';
+import * as Location from 'expo-location';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Skeleton } from '../../components/ShimmerSkeleton';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  ActivityIndicator,
+  Alert, Animated,
+  Dimensions,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform, StyleSheet,
+  Text, TextInput,
+  TouchableOpacity,
+  TouchableWithoutFeedback,
+  View
+} from 'react-native';
+import { useLanguage } from '../../context/LanguageContext';
 import { useTheme } from '../../context/ThemeContext';
+import { supabase } from '../../supabase';
+import { getCurrentUser } from '../../utils/auth';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -48,33 +57,24 @@ export const getInitials = (name?: string) => {
   }
 };
 
-const Skeleton = ({ width, height, style, borderRadius = 8, isDark = false }: { width?: any, height: any, style?: any, borderRadius?: number, isDark?: boolean }) => {
-  const fadeAnim = useRef(new Animated.Value(0.5)).current;
-  useEffect(() => {
-    Animated.loop(Animated.sequence([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
-    ])).start();
-  }, [fadeAnim]);
-  return <Animated.View style={[{ width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, style]} />;
-};
 
-const SkeletonMessage = ({ isMine, isDark }: { isMine: boolean; isDark: boolean }) => (
+
+const SkeletonMessage = ({ isMine }: { isMine: boolean }) => (
   <View style={[styles.msgWrapper, isMine ? styles.myMsgWrapper : styles.theirMsgWrapper]}>
     {!isMine && (
       <View style={styles.msgAvatarWrap}>
-        <Skeleton width={32} height={32} borderRadius={16} isDark={isDark} />
+        <Skeleton width={32} height={32} borderRadius={16} />
       </View>
     )}
     <View style={[
       styles.msgBubble,
       isMine ? styles.myBubble : styles.theirBubble,
-      { backgroundColor: isMine ? (isDark ? '#064e3b' : '#dcf8c6') : (isDark ? '#1c1c1e' : '#fff'), padding: 12, minWidth: 150, elevation: 0 }
+      { backgroundColor: 'transparent', padding: 12, minWidth: 150, elevation: 0 }
     ]}>
-      <Skeleton width={isMine ? "80%" : "60%"} height={14} style={{ marginBottom: 6, backgroundColor: isMine ? (isDark ? '#047857' : '#c5dfb1') : (isDark ? '#333' : '#e0e0e0') }} isDark={isDark} />
-      <Skeleton width={isMine ? "50%" : "90%"} height={14} style={{ marginBottom: 8, backgroundColor: isMine ? (isDark ? '#047857' : '#c5dfb1') : (isDark ? '#333' : '#e0e0e0') }} isDark={isDark} />
+      <Skeleton width={isMine ? "80%" : "60%"} height={14} style={{ marginBottom: 6 }} />
+      <Skeleton width={isMine ? "50%" : "90%"} height={14} style={{ marginBottom: 8 }} />
       <View style={{ alignSelf: 'flex-end' }}>
-        <Skeleton width={40} height={10} style={{ backgroundColor: isMine ? (isDark ? '#047857' : '#c5dfb1') : (isDark ? '#333' : '#e0e0e0') }} isDark={isDark} />
+        <Skeleton width={40} height={10} />
       </View>
     </View>
   </View>
@@ -88,6 +88,8 @@ export default function ChatRoom() {
     id?: string | string[]; listing_id?: string | string[]; seller_id?: string | string[];
     listing_title?: string | string[]; listing_price?: string | string[]; action?: string | string[];
   }>();
+
+  const insets = useSafeAreaInsets();
   
   const actionParam = Array.isArray(rawAction) ? rawAction[0] : rawAction;
   const chatId = Array.isArray(rawChatId) ? rawChatId[0] : rawChatId;
@@ -98,7 +100,7 @@ export default function ChatRoom() {
   
   const router = useRouter();
   const { lang, t, translateUGC } = useLanguage();
-  const { colors, isDark } = useTheme();
+ const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
 
   const [imgError, setImgError] = useState(false);
   const [messages, setMessages] = useState<any[]>([]);
@@ -227,6 +229,7 @@ export default function ChatRoom() {
       }
     }
   }, [actionParam, loading, chatDetails, messages.length]);
+
   
   useEffect(() => { refetchMessagesRef.current = refetchMessages; }, [refetchMessages]);
   useEffect(() => { forceMarkAsReadRef.current = forceMarkAsRead; }, [forceMarkAsRead]);
@@ -1049,7 +1052,7 @@ export default function ChatRoom() {
       )}
 
       {/* ═══ HEADER ════════════════════════════════════════ */}
-      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border, paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => router.canGoBack() ? router.back() : router.push('/chats' as any)} style={styles.headerBack} hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}>
           <Ionicons name="arrow-back" size={28} color={colors.text} />
         </TouchableOpacity>
@@ -1064,12 +1067,13 @@ export default function ChatRoom() {
             {isOtherUserOnline && <View style={styles.headerOnlineDot} />}
           </View>
           <View>
-            {loading && !otherUserProfile ? (
-              <>
-                <Skeleton width={120} height={16} style={{ marginBottom: 4 }} isDark={isDark} />
-                <Skeleton width={80} height={12} isDark={isDark} />
-              </>
-            ) : (
+
+         {loading && !otherUserProfile ? (
+          <>
+         <Skeleton width={120} height={16} style={{ marginBottom: 4 }} />
+         <Skeleton width={80} height={12} />
+         </>
+          ) : (
               <>
                 <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>{otherUserProfile ? (otherUserProfile.real_name || otherUserProfile.display_name || 'Unknown User') : 'Unknown User'}</Text>
                 <Text style={[styles.headerSubTitle, { color: colors.textSecondary }]} numberOfLines={1}>{localizedListingTitle(chatDetails?.listings)}</Text> 
@@ -1134,10 +1138,10 @@ export default function ChatRoom() {
       {/* ═══ CHAT FEED ═════════════════════════════════════ */}
       {loading ? (
         <FlatList
-          data={[1, 2, 3, 4, 5, 6]}
-          keyExtractor={(item) => String(item)}
+          data={['1', '2', '3', '4', '5', '6']} // ✨ Changed to strings to fix TS inference
+          keyExtractor={(item) => item} // ✨ Much cleaner
           inverted
-          renderItem={({ index }) => <SkeletonMessage isMine={index % 2 !== 0} isDark={isDark} />}
+          renderItem={({ index }) => <SkeletonMessage isMine={index % 2 !== 0} />}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
         />
@@ -1357,7 +1361,7 @@ export default function ChatRoom() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   loadingOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 999, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 20, borderBottomWidth: 1, zIndex: 10 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, zIndex: 10 },
   headerBack: { paddingRight: 10 },
   headerTitleContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerOnlineDot: { position: 'absolute', bottom: 0, right: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: '#4CAF50', borderWidth: 1.5, borderColor: '#fff' },

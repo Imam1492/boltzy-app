@@ -1,41 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  ActivityIndicator, Alert, Dimensions, Image, Linking,
+  Alert,
+  Animated,
+  Dimensions, Image,
   Platform, ScrollView, Share, StyleSheet, Text,
-  TouchableOpacity, View, Animated,
+  TouchableOpacity, View
 } from 'react-native';
+import { useLanguage } from '../../context/LanguageContext';
+import { useTheme } from '../../context/ThemeContext';
 import { supabase } from '../../supabase';
 import { getCurrentUser } from '../../utils/auth';
-import { useLanguage } from '../../context/LanguageContext'; 
-import * as ImageManipulator from 'expo-image-manipulator';
-import { useTheme } from '../../context/ThemeContext';
+import { Skeleton } from '../../components/ShimmerSkeleton';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const CARD_W = (SCREEN_W - 48) / 2;
 
-const Skeleton = ({ width, height, style, borderRadius = 8, isDark = false }: { width?: any, height: any, style?: any, borderRadius?: number, isDark?: boolean }) => {
-  const fadeAnim = useRef(new Animated.Value(0.5)).current;
-  
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-        Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
-      ])
-    ).start();
-  }, [fadeAnim]);
-
-  return (
-    <Animated.View 
-      style={[
-        { width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, 
-        style
-      ]} 
-    />
-  );
-};
 
 const StarRow = ({ rating, size = 14, color = '#F5A623' }: { rating: number; size?: number; color?: string }) => (
   <View style={{ flexDirection: 'row', gap: 2 }}>
@@ -99,8 +81,10 @@ export default function PublicProfile() {
   const userId = Array.isArray(rawUserId) ? rawUserId[0] : rawUserId;
   const router = useRouter();
   
+  const insets = useSafeAreaInsets();
+
   const { lang, t, translateUGC } = useLanguage();
-  const { colors, isDark } = useTheme();
+ const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
 
   const [profile, setProfile]       = useState<any>(null);
   const [stats, setStats]           = useState<{ avg_rating: number; review_count: number } | null>(null);
@@ -263,27 +247,27 @@ export default function PublicProfile() {
         <ScrollView showsVerticalScrollIndicator={false} stickyHeaderIndices={[1]}>
           <View style={[s.hero, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
             <View style={s.heroNav}>
-              <Skeleton width={40} height={40} borderRadius={20} isDark={isDark} />
-              <Skeleton width={40} height={40} borderRadius={20} isDark={isDark} />
+              <Skeleton width={40} height={40} borderRadius={20} />
+              <Skeleton width={40} height={40} borderRadius={20} />
             </View>
             <View style={s.avatarWrap}>
-              <Skeleton width={100} height={100} borderRadius={50} isDark={isDark} />
+              <Skeleton width={100} height={100} borderRadius={50} />
             </View>
-            <Skeleton width={180} height={28} style={{ marginBottom: 6 }} isDark={isDark} />
-            <Skeleton width={100} height={16} style={{ marginBottom: 16 }} isDark={isDark} />
-            <Skeleton width={130} height={32} borderRadius={16} style={{ marginBottom: 20 }} isDark={isDark} />
-            <Skeleton width="100%" height={85} borderRadius={16} style={{ marginBottom: 20 }} isDark={isDark} />
+            <Skeleton width={180} height={28} style={{ marginBottom: 6 }} />
+            <Skeleton width={100} height={16} style={{ marginBottom: 16 }} />
+            <Skeleton width={130} height={32} borderRadius={16} style={{ marginBottom: 20 }} />
+            <Skeleton width="100%" height={85} borderRadius={16} style={{ marginBottom: 20 }} />
             <View style={[s.ctaRow, { maxWidth: 400, alignSelf: 'center' }]}>
-              <Skeleton width="48%" height={48} borderRadius={14} isDark={isDark} />
-              <Skeleton width="48%" height={48} borderRadius={14} isDark={isDark} />
+              <Skeleton width="48%" height={48} borderRadius={14} />
+              <Skeleton width="48%" height={48} borderRadius={14} />
             </View>
           </View>
           <View style={[s.tabBar, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
             <View style={[s.tab, { borderBottomWidth: 2.5, borderBottomColor: colors.text }]}>
-              <Skeleton width={100} height={18} isDark={isDark} />
+              <Skeleton width={100} height={18} />
             </View>
             <View style={s.tab}>
-              <Skeleton width={100} height={18} isDark={isDark} />
+              <Skeleton width={100} height={18} />
             </View>
           </View>
           <View style={s.tabContent}>
@@ -291,11 +275,11 @@ export default function PublicProfile() {
               {[1, 2, 3, 4].map(key => (
                 <View key={key} style={s.gridItem}>
                   <View style={[s.listingCard, { backgroundColor: colors.card }]}>
-                    <Skeleton width="100%" height={CARD_W * 0.72} borderRadius={0} isDark={isDark} />
+                    <Skeleton width="100%" height={CARD_W * 0.72} borderRadius={0} />
                     <View style={s.listingCardBody}>
-                      <Skeleton width="60%" height={18} style={{ marginBottom: 6 }} isDark={isDark} />
-                      <Skeleton width="90%" height={14} style={{ marginBottom: 6 }} isDark={isDark} />
-                      <Skeleton width="50%" height={12} isDark={isDark} />
+                      <Skeleton width="60%" height={18} style={{ marginBottom: 6 }} />
+                      <Skeleton width="90%" height={14} style={{ marginBottom: 6 }} />
+                      <Skeleton width="50%" height={12} />
                     </View>
                   </View>
                 </View>

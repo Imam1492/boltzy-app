@@ -1,17 +1,22 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import Head from 'expo-router/head';
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Skeleton } from '../../components/ShimmerSkeleton';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  ActivityIndicator, Alert, Dimensions, FlatList, Image, Linking,
+  Alert,
+  Animated,
+  Dimensions, FlatList, Image,
+  Modal,
+  NativeScrollEvent, NativeSyntheticEvent,
   Platform, ScrollView, Share, StyleSheet, Text,
-  TouchableOpacity, View, NativeScrollEvent, NativeSyntheticEvent, Modal, Animated,
+  TouchableOpacity, View
 } from 'react-native';
-import { supabase } from '../../supabase';
-import * as ImageManipulator from 'expo-image-manipulator';
 import Toast from 'react-native-toast-message';
 import { useLanguage } from '../../context/LanguageContext';
 import { useTheme } from '../../context/ThemeContext';
+import { supabase } from '../../supabase';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -32,8 +37,10 @@ export default function ListingDetails() {
   const { id } = useLocalSearchParams();
   const router  = useRouter();
 
+  const insets = useSafeAreaInsets();
+
   const { lang, t, translateUGC } = useLanguage();
-  const { colors, isDark } = useTheme();
+ const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
 
   const [listing, setListing]             = useState<any>(null);
   const [seller, setSeller]               = useState<any>(null);
@@ -49,27 +56,7 @@ export default function ListingDetails() {
 
   const flatRef = useRef<FlatList>(null);
 
-  const Skeleton = ({ width, height, style, borderRadius = 8 }: { width?: any, height: any, style?: any, borderRadius?: number }) => {
-    const fadeAnim = useRef(new Animated.Value(0.5)).current;
-    
-    useEffect(() => {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-          Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
-        ])
-      ).start();
-    }, [fadeAnim]);
-
-    return (
-      <Animated.View 
-        style={[
-          { width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, 
-          style
-        ]} 
-      />
-    );
-  };
+  
 
   useEffect(() => { fetchData(); }, [id]);
 
@@ -680,11 +667,7 @@ const s = StyleSheet.create({
   carouselWrap:         { width: '100%', height: 320, position: 'relative' },
   carouselImg:          { width: SCREEN_W, height: 320 },
   noImageBox:           { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  overlayHeader: {
-    position: 'absolute', zIndex: 20,
-    top: Platform.OS === 'ios' ? 54 : 22, left: 16, right: 16,
-    flexDirection: 'row', justifyContent: 'space-between',
-  },
+ overlayHeader: { position: 'absolute', zIndex: 20, left: 16, right: 16, flexDirection: 'row', justifyContent: 'space-between' },
   overlayBtn: {
     width: 38, height: 38, borderRadius: 19,
     justifyContent: 'center', alignItems: 'center',

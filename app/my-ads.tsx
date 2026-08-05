@@ -1,29 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState, useRef } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, StyleSheet, Text, TouchableOpacity, View, Platform, Animated } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Animated, FlatList, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Toast from 'react-native-toast-message';
+import { useLanguage } from '../context/LanguageContext';
+import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../supabase';
 import { getCurrentUser } from '../utils/auth';
-import { useLanguage } from '../context/LanguageContext';
-import Toast from 'react-native-toast-message';
-import { useTheme } from '../context/ThemeContext'; 
+import { Skeleton } from '../components/ShimmerSkeleton';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const Skeleton = ({ width, height, style, borderRadius = 8, isDark = false }: { width?: any, height: any, style?: any, borderRadius?: number, isDark?: boolean }) => {
-  const fadeAnim = useRef(new Animated.Value(0.5)).current;
-  useEffect(() => {
-    Animated.loop(Animated.sequence([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
-    ])).start();
-  }, [fadeAnim]);
-  return <Animated.View style={[{ width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, style]} />;
-};
 
 export default function MyAds() {
   const router = useRouter();
   const { lang, t, translateUGC } = useLanguage();
-  const { colors, isDark } = useTheme();
+ const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
   
+const insets = useSafeAreaInsets();
+
   const [myListings, setMyListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'Active' | 'Sold' | 'Inactive'>('Active');
@@ -278,7 +272,7 @@ export default function MyAds() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={[styles.header, { backgroundColor: colors.card }]}>
+      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border, paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color={colors.text} /></TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.text }]}>{t('my_ads_title') || 'My Ads'}</Text>
         <View style={{ width: 28 }} />
@@ -298,26 +292,26 @@ export default function MyAds() {
 
       {loading ? (
         <FlatList
-          data={[1, 2, 3, 4]}
-          keyExtractor={(item) => String(item)}
+          data={['1', '2', '3', '4']}
+          keyExtractor={(item) => item}
           contentContainerStyle={styles.listContainer}
           renderItem={() => (
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={styles.cardMain}>
-                <Skeleton width={90} height={90} borderRadius={12} isDark={isDark} />
+                <Skeleton width={90} height={90} borderRadius={12} />
                 <View style={styles.details}>
-                  <Skeleton width={80} height={22} style={{ marginBottom: 6 }} isDark={isDark} />
-                  <Skeleton width={160} height={16} style={{ marginBottom: 12 }} isDark={isDark} />
+                  <Skeleton width={80} height={22} style={{ marginBottom: 6 }} />
+                  <Skeleton width={160} height={16} style={{ marginBottom: 12 }} />
                   <View style={styles.statsRow}>
-                    <Skeleton width={60} height={22} borderRadius={6} isDark={isDark} />
-                    <Skeleton width={40} height={16} isDark={isDark} />
+                    <Skeleton width={60} height={22} borderRadius={6} />
+                    <Skeleton width={40} height={16} />
                   </View>
                 </View>
               </View>
               <View style={[styles.actionRow, { borderTopColor: colors.border }]}>
-                <Skeleton height={46} borderRadius={0} style={{ flex: 1 }} isDark={isDark} />
-                <Skeleton height={46} borderRadius={0} style={[{ flex: 1 }, styles.borderLeft, { borderLeftColor: colors.border }]} isDark={isDark} />
-                <Skeleton height={46} borderRadius={0} style={[{ flex: 1 }, styles.borderLeft, { borderLeftColor: colors.border }]} isDark={isDark} />
+                <Skeleton height={46} borderRadius={0} style={{ flex: 1 }} />
+                <Skeleton height={46} borderRadius={0} style={[{ flex: 1 }, styles.borderLeft, { borderLeftColor: colors.border }]} />
+                <Skeleton height={46} borderRadius={0} style={[{ flex: 1 }, styles.borderLeft, { borderLeftColor: colors.border }]} />
               </View>
             </View>
           )}
@@ -347,7 +341,7 @@ export default function MyAds() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 60, paddingBottom: 20 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 20 },
   headerTitle: { fontSize: 22, fontWeight: 'bold' },
   
   tabContainer: { flexDirection: 'row', marginHorizontal: 16, marginTop: 10, borderRadius: 12, padding: 4 },

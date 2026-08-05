@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^15.1.1",
-    "@hcaptcha/react-native-hcaptcha": "^4.0.0",
+    "@hcaptcha/react-native-hcaptcha": "^4.1.0",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@supabase/supabase-js": "^2.108.2",
     "aes-js": "^3.1.2",
@@ -27,6 +27,7 @@
     "expo-image": "~56.0.11",
     "expo-image-manipulator": "~56.0.23",
     "expo-image-picker": "~56.0.22",
+    "expo-linear-gradient": "~56.0.4",
     "expo-linking": "~56.0.16",
     "expo-localization": "~56.0.6",
     "expo-location": "~56.0.22",

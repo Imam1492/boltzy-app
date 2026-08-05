@@ -1,67 +1,49 @@
-// context/ThemeContext.tsx
+import React, { createContext, useContext, useState } from 'react';
 
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { useColorScheme as useSystemColorScheme } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Colors } from '../constants/Colors';
-
-export type ThemeMode = 'light' | 'dark' | 'system';
-
-interface ThemeContextType {
-  themeMode: ThemeMode;
+type ThemeContextType = {
   isDark: boolean;
-  colors: typeof Colors.light;
-  setThemeMode: (mode: ThemeMode) => Promise<void>;
-}
+  colors: any;
+  toggleTheme: () => void; // ✨ Make sure toggleTheme is declared here
+};
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-export const ThemeProvider = ({ children }: { children: ReactNode }) => {
-  const systemColorScheme = useSystemColorScheme();
-  const [themeMode, setThemeModeState] = useState<ThemeMode>('system');
-  const [isReady, setIsReady] = useState(false);
+export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
+  const [isDark, setIsDark] = useState(false);
 
-  useEffect(() => {
-    const loadTheme = async () => {
-      try {
-        const savedTheme = await AsyncStorage.getItem('appTheme') as ThemeMode | null;
-        if (savedTheme) {
-          setThemeModeState(savedTheme);
-        }
-      } catch (e) {
-        console.error('Failed to load theme preferences', e);
-      } finally {
-        setIsReady(true);
-      }
-    };
-    loadTheme();
-  }, []);
-
-  const setThemeMode = async (mode: ThemeMode) => {
-    setThemeModeState(mode);
-    await AsyncStorage.setItem('appTheme', mode);
+  const toggleTheme = () => {
+    setIsDark((prev) => !prev);
   };
 
-  // Determine if we should currently render dark mode colors
-  const isDark = themeMode === 'system' ? systemColorScheme === 'dark' : themeMode === 'dark';
-  
-  // Grab the correct palette from our constants
-  const colors = isDark ? Colors.dark : Colors.light;
-
-  if (!isReady) return null; // Prevents UI flashing on boot
+  const colors = isDark
+    ? {
+        background: '#020617',
+        card: '#0F172A',
+        backgroundSecondary: '#1E293B',
+        text: '#F8FAFC',
+        textSecondary: '#94A3B8',
+        border: '#334155',
+        tint: '#6366F1',
+      }
+    : {
+        background: '#F8FAFC',
+        card: '#FFFFFF',
+        backgroundSecondary: '#F1F5F9',
+        text: '#0F172A',
+        textSecondary: '#64748B',
+        border: '#E2E8F0',
+        tint: '#4F46E5',
+      };
 
   return (
-    <ThemeContext.Provider value={{ themeMode, isDark, colors, setThemeMode }}>
+    <ThemeContext.Provider value={{ isDark, colors, toggleTheme }}>
       {children}
     </ThemeContext.Provider>
   );
 };
 
-// A simple hook to grab colors instantly in any file
 export const useTheme = () => {
   const context = useContext(ThemeContext);
-  if (!context) {
-    throw new Error('useTheme must be used within a ThemeProvider');
-  }
+  if (!context) throw new Error('useTheme must be used within ThemeProvider');
   return context;
 };

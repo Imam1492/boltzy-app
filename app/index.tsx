@@ -1,18 +1,24 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, 
-  Alert, KeyboardAvoidingView, Platform, ScrollView, Modal 
-} from 'react-native';
-import { supabase } from '../supabase';
-import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
 import { useURL } from 'expo-linking';
+import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
+import { useEffect, useRef, useState } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  ActivityIndicator,
+  Alert, KeyboardAvoidingView,
+  Modal,
+  Platform, ScrollView,
+  StyleSheet,
+  Text, TextInput, TouchableOpacity,
+  View
+} from 'react-native';
 import Toast from 'react-native-toast-message';
+import ConfirmHcaptcha from '@hcaptcha/react-native-hcaptcha';
 import WebLanding from '../components/WebLanding';
-import ConfirmHcaptcha from '../components/Captcha';
-import { useTheme } from '../context/ThemeContext'; 
+import { useTheme } from '../context/ThemeContext';
+import { supabase } from '../supabase';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -24,10 +30,14 @@ type AuthMode = 'otp' | 'login' | 'signup' | 'forgot';
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { colors, isDark } = useTheme();
+ const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
+
+ // ✨ ADD THIS LINE
+  const insets = useSafeAreaInsets();
   
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState(''); // ✨ 1. ADD THIS LINE
   const [otp, setOtp] = useState('');
   const [step, setStep] = useState(1);
   const [authMode, setAuthMode] = useState<AuthMode>('login');
@@ -324,6 +334,16 @@ export default function LoginScreen() {
     }
 
     if (authMode === 'signup') {
+      // ✨ 2. ADD THESE VALIDATION CHECKS
+      if (!fullName.trim()) {
+        Toast.show({ type: 'error', text1: 'Name Required', text2: 'Please enter your full name.', position: 'top' });
+        return;
+      }
+      if (fullName.trim().length > 28) {
+        Toast.show({ type: 'error', text1: 'Name Too Long', text2: 'Name cannot exceed 28 characters.', position: 'top' });
+        return;
+      }
+
       if (!isStrongPassword(password)) {
         Toast.show({ type: 'error', text1: 'Weak Password', text2: 'Must be 8+ characters with uppercase, lowercase, number, and symbol.', position: 'top' });
         return;
@@ -390,7 +410,10 @@ export default function LoginScreen() {
           const { error } = await supabase.auth.signUp({ 
             email: trimmedEmail, 
             password,
-            options: { captchaToken: data }
+            options: { 
+              captchaToken: data,
+              data: { full_name: fullName.trim() } // ✨ 3. ADD THIS LINE TO SAVE TO DATABASE
+            }
           });
           if (error) throw error;
           Toast.show({ type: 'success', text1: 'Account Created!', text2: 'Please check your email.', position: 'top' });
@@ -484,7 +507,7 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={styles.inner}>
+      <View style={[styles.inner, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         
         {step !== 3 && <Text style={[styles.logo, { color: colors.text }]}>Boltzy</Text>}
         
@@ -517,6 +540,25 @@ export default function LoginScreen() {
               </>
             )}
 
+            {/* ✨ 4. ADD THIS NEW FULL NAME BLOCK HERE */}
+            {authMode === 'signup' && (
+              <View style={{ marginBottom: 16 }}>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text, marginBottom: 4 }]}
+                  placeholder="Full Name (e.g. Rahul Sharma)"
+                  placeholderTextColor={colors.textSecondary}
+                  value={fullName}
+                  onChangeText={setFullName}
+                  maxLength={28}
+                  autoCapitalize="words"
+                />
+                <Text style={{ fontSize: 12, color: colors.textSecondary, textAlign: 'right', paddingRight: 4 }}>
+                  {fullName.length}/28
+                </Text>
+              </View>
+            )}
+
+            {/* EXISTING EMAIL INPUT */}
             <TextInput
               style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]}
               placeholder="name@example.com"
@@ -527,6 +569,7 @@ export default function LoginScreen() {
               autoCapitalize="none"
               autoCorrect={false}
             />
+
 
             {(authMode === 'login' || authMode === 'signup') && (
               <View style={[styles.passwordContainer, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>

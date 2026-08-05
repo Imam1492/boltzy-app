@@ -1,19 +1,29 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView,
-  Modal, ActivityIndicator, Platform, KeyboardAvoidingView,
-  Image, FlatList, Alert, Animated, BackHandler,
-} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { supabase } from '../supabase';
-import { getCurrentUser } from '../utils/auth';
-import { useLanguage } from '../context/LanguageContext';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import * as ImageManipulator from 'expo-image-manipulator';
+import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Skeleton } from '../components/ShimmerSkeleton';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  ActivityIndicator,
+  Alert, Animated, BackHandler,
+  FlatList,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text, TextInput, TouchableOpacity,
+  View,
+} from 'react-native';
 import Toast from 'react-native-toast-message';
+import { useLanguage } from '../context/LanguageContext';
 import { useTheme } from '../context/ThemeContext';
+import { supabase } from '../supabase';
+import { getCurrentUser } from '../utils/auth';
 
 function categoryI18nKey(cat: string): string {
   return `cat_${cat.replace(/\s+/g, '_')}`;
@@ -53,7 +63,10 @@ const containsInappropriateContent = (text: string): boolean => {
 export default function PostAd() {
   const router = useRouter();
   const { t } = useLanguage();
-  const { colors, isDark } = useTheme();
+ const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
+
+ // ✨ ADD THIS LINE RIGHT HERE:
+  const insets = useSafeAreaInsets();
 
   const [title, setTitle]           = useState('');
   const [price, setPrice]           = useState('');
@@ -85,27 +98,6 @@ export default function PostAd() {
 
   const suggestionKeys = HIGHLIGHT_SUGGESTION_KEYS[category] || HIGHLIGHT_SUGGESTION_KEYS.default;
 
-  const Skeleton = ({ width, height, style, borderRadius = 8 }: { width?: any, height: any, style?: any, borderRadius?: number }) => {
-    const fadeAnim = useRef(new Animated.Value(0.5)).current;
-    
-    useEffect(() => {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-          Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
-        ])
-      ).start();
-    }, [fadeAnim]);
-
-    return (
-      <Animated.View 
-        style={[
-          { width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, 
-          style
-        ]} 
-      />
-    );
-  };
 
   const saveAsDraft = async () => {
     setIsUploading(true);
@@ -415,14 +407,29 @@ export default function PostAd() {
         return;
       }
 
-      if (category === 'Other' && customCategory.trim() && data?.listing_id) {
-        await supabase.from('listings').update({ custom_category: customCategory.trim() }).eq('id', data.listing_id);
+      // ✨ NEW: Bulletproof ID retrieval
+      let insertedId = data?.listing_id;
+      if (!insertedId) {
+        // If the database didn't return the ID, manually fetch the ad we just created!
+        const { data: latestAd } = await supabase
+          .from('listings')
+          .select('id')
+          .eq('seller_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+        if (latestAd) insertedId = latestAd.id;
       }
 
-      if (data?.listing_id) {
+      if (category === 'Other' && customCategory.trim() && insertedId) {
+        await supabase.from('listings').update({ custom_category: customCategory.trim() }).eq('id', insertedId);
+      }
+
+      // ✨ Apply the automated approval status!
+      if (insertedId) {
          await supabase.from('listings')
            .update({ approval_status: autoStatus, moderation_note: autoNote })
-           .eq('id', data.listing_id);
+           .eq('id', insertedId);
       }
 
       if (isFlagged) {
@@ -452,7 +459,7 @@ export default function PostAd() {
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border, paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={handleBackPress} style={{ padding: 8 }}>
           <Ionicons name="close" size={28} color={colors.text} />
         </TouchableOpacity>
@@ -815,7 +822,7 @@ export default function PostAd() {
 
 const styles = StyleSheet.create({
   container:      { flex: 1 },
-  header:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 20, borderBottomWidth: 1 },
+  header:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1 },
   headerTitle:    { fontSize: 20, fontWeight: 'bold' },
   scrollContent:  { padding: 20, paddingBottom: 120 },
 

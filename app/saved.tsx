@@ -1,28 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState, useRef } from 'react';
-import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View, Image, Alert, Animated, useWindowDimensions } from 'react-native';
-import { supabase } from '../supabase';
-import { getCurrentUser } from '../utils/auth';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Animated, FlatList, Image, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { useLanguage } from '../context/LanguageContext';
 import { useTheme } from '../context/ThemeContext';
-
-const Skeleton = ({ width, height, style, borderRadius = 8, isDark = false }: { width?: any, height: any, style?: any, borderRadius?: number, isDark?: boolean }) => {
-  const fadeAnim = useRef(new Animated.Value(0.5)).current;
-  useEffect(() => {
-    Animated.loop(Animated.sequence([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
-    ])).start();
-  }, [fadeAnim]);
-  return <Animated.View style={[{ width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, style]} />;
-};
+import { supabase } from '../supabase';
+import { getCurrentUser } from '../utils/auth';
+import { Skeleton } from '../components/ShimmerSkeleton';
 
 export default function SavedItems() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const { t, translateUGC } = useLanguage();
-  const { colors, isDark } = useTheme();
+ const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
 
   const [savedListings, setSavedListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -116,20 +106,20 @@ export default function SavedItems() {
         <FlatList
           key={viewMode}
           numColumns={viewMode === 'grid' ? 2 : 1}
-          data={[1, 2, 3, 4, 5, 6]}
-          keyExtractor={(item) => String(item)}
+          data={['1', '2', '3', '4', '5', '6']}
+          keyExtractor={(item) => item}
           contentContainerStyle={styles.listContainer}
           columnWrapperStyle={viewMode === 'grid' ? { gap: 12 } : undefined}
           renderItem={() => (
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }, viewMode === 'grid' && styles.cardGrid]}>
-              <Skeleton width={viewMode === 'grid' ? '100%' : 110} height={110} borderRadius={0} isDark={isDark} />
+              <Skeleton width={viewMode === 'grid' ? '100%' : 110} height={110} borderRadius={0} />
               <View style={styles.cardContent}>
                 <View style={styles.cardHeader}>
                   <View style={{ flex: 1, gap: 6 }}>
-                    <Skeleton width={80} height={20} isDark={isDark} />
-                    <Skeleton width={viewMode === 'grid' ? 100 : 140} height={16} isDark={isDark} />
+                    <Skeleton width={80} height={20} />
+                    <Skeleton width={viewMode === 'grid' ? 100 : 140} height={16} />
                   </View>
-                  <Skeleton width={24} height={24} borderRadius={12} isDark={isDark} />
+                  <Skeleton width={24} height={24} borderRadius={12} />
                 </View>
               </View>
             </View>

@@ -1,26 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Skeleton } from '../components/ShimmerSkeleton';
 import {
-  ActivityIndicator, Alert, FlatList, Image, Platform, StyleSheet,
-  Text, TextInput, TouchableOpacity, View, Modal, TouchableWithoutFeedback, KeyboardAvoidingView, Animated
+  Alert,
+  Animated,
+  FlatList, Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform, StyleSheet,
+  Text, TextInput, TouchableOpacity, View
 } from 'react-native';
-import { supabase } from '../supabase';
-import { getCurrentUser } from '../utils/auth';
-import { getLocalizedMessageContent } from '../utils/localizedContent';
 import { useLanguage } from '../context/LanguageContext';
 import { useTheme } from '../context/ThemeContext';
+import { supabase } from '../supabase';
+import { getCurrentUser } from '../utils/auth';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const Skeleton = ({ width, height, style, borderRadius = 8, isDark = false }: { width?: any, height: any, style?: any, borderRadius?: number, isDark?: boolean }) => {
-  const fadeAnim = useRef(new Animated.Value(0.5)).current;
-  useEffect(() => {
-    Animated.loop(Animated.sequence([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-      Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
-    ])).start();
-  }, [fadeAnim]);
-  return <Animated.View style={[{ width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, style]} />;
-};
+
 
 export const getInitials = (name?: string) => {
   if (!name || typeof name !== 'string') return '?';
@@ -39,7 +36,10 @@ export const getInitials = (name?: string) => {
 export default function Inbox() {
   const router = useRouter();
   const { lang, t, translateUGC } = useLanguage();
-  const { colors, isDark } = useTheme();
+ const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
+
+ // ✨ ADD THIS LINE
+  const insets = useSafeAreaInsets();
 
   const [chatRooms, setChatRooms] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -396,8 +396,8 @@ export default function Inbox() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <View style={{ backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border }}>
-          <View style={[styles.header, { borderBottomWidth: 0, paddingBottom: 0 }]}>
+        <View style={{ backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border, paddingTop: insets.top }}>
+        <View style={[styles.header, { borderBottomWidth: 0, paddingBottom: 0 }]}>
             <TouchableOpacity onPress={() => router.back()}><Ionicons name="arrow-back" size={28} color={colors.text} /></TouchableOpacity>
             <Text style={[styles.headerTitle, { color: colors.text }]}>{t('messages_title') || 'Messages'}</Text>
             
@@ -440,15 +440,18 @@ export default function Inbox() {
       </View>
 
       {loading && chatRooms.length === 0 ? (
-        <FlatList data={[1, 2, 3]} renderItem={() => (
+        <FlatList 
+          data={['1', '2', '3']} 
+          keyExtractor={(item) => item}
+          renderItem={() => (
            <View style={[styles.chatCard, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
               <View style={styles.imageWrapper}>
-                 <Skeleton width={58} height={58} borderRadius={12} isDark={isDark} />
+                 <Skeleton width={58} height={58} borderRadius={12} />
               </View>
               <View style={styles.chatInfo}>
-                 <Skeleton width={120} height={16} style={{ marginBottom: 6 }} isDark={isDark} />
-                 <Skeleton width={80} height={14} style={{ marginBottom: 6 }} isDark={isDark} />
-                 <Skeleton width={180} height={14} isDark={isDark} />
+                 <Skeleton width={120} height={16} style={{ marginBottom: 6 }} />
+                 <Skeleton width={80} height={14} style={{ marginBottom: 6 }} />
+                 <Skeleton width={180} height={14} />
               </View>
            </View>
         )} />
@@ -492,7 +495,7 @@ export default function Inbox() {
       {/* ═══ 3-DOT ACTION MENU ════════════════════════════ */}
       <Modal visible={chatMenuVisible} transparent animationType="slide">
         <TouchableOpacity style={styles.bottomSheetOverlay} activeOpacity={1} onPress={() => setChatMenuVisible(false)}>
-          <View style={[styles.bottomSheetCard, { backgroundColor: colors.card }]}>
+          <View style={[styles.bottomSheetCard, { backgroundColor: colors.card, paddingBottom: insets.bottom + 24 }]}>
             <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
             <Text style={[styles.sheetTitle, { color: colors.text }]}>Chat Options</Text>
             
@@ -554,7 +557,7 @@ export default function Inbox() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 20, borderBottomWidth: 1 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1 },
   headerTitle: { fontSize: 22, fontWeight: 'bold' },
   selectModeBtn: { padding: 4 },
   tabBtn: { flex: 1, paddingVertical: 12, borderBottomWidth: 2, borderColor: 'transparent', alignItems: 'center' },
@@ -586,7 +589,7 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 18, fontWeight: 'bold', marginBottom: 8, textAlign: 'center' },
 
   bottomSheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  bottomSheetCard: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: Platform.OS === 'ios' ? 40 : 24 },
+  bottomSheetCard: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24 },
   sheetHandle: { width: 40, height: 5, borderRadius: 3, alignSelf: 'center', marginBottom: 20 },
   sheetTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
   sheetAction: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, borderBottomWidth: 1 },

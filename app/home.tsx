@@ -1,11 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter, useFocusEffect,useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import ConfirmModal from '../components/ConfirmModal';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { useTheme } from '../context/ThemeContext';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+
 
 import {
   ActivityIndicator, Animated, FlatList, StyleSheet, Text, TouchableOpacity,
@@ -32,6 +36,19 @@ const SORT_OPTIONS: { key: SortOption; label: string; icon: string }[] = [
   { key: 'price_asc',  label: 'Price: Low to High',   icon: 'trending-up-outline'  },
   { key: 'price_desc', label: 'Price: High to Low',   icon: 'trending-down-outline'},
 ];
+
+const [notifications, setNotifications] = useState([
+    { id: '1', title: 'Ad is Live! 🎉', message: 'Your ad went live successfully.', icon: 'checkmark-circle', color: '#34C759', time: 'Just now' },
+    { id: '2', title: 'Action Required', message: 'Modify your ad to make it live. It may violate community guidelines.', icon: 'alert-circle', color: '#F5A623', time: '2 hours ago' },
+    { id: '3', title: 'Ad Expired', message: 'Your ad has expired. Relist it to keep selling!', icon: 'time', color: '#8E8E93', time: '1 day ago' },
+    { id: '4', title: 'Ad Deleted', message: 'Your ad has been successfully deleted.', icon: 'trash', color: '#FF3B30', time: '2 days ago' },
+    { id: '5', title: 'Security Alert', message: 'Your password was changed successfully.', icon: 'lock-closed', color: '#007AFF', time: '3 days ago' },
+    { id: '6', title: 'Report Submitted', message: 'Your report against an ad/user was submitted to our moderation team.', icon: 'flag', color: '#007AFF', time: '1 week ago' },
+    { id: '7', title: 'Account Warning', message: 'You have been reported. Please contact support to resolve the issue.', icon: 'warning', color: '#FF3B30', time: '1 week ago' }
+  ]);
+
+  const { openProfile } = useLocalSearchParams();
+  const [isHelpExpanded, setIsHelpExpanded] = useState(false);
 
 const CONDITIONS: Condition[] = ['All','New','Like New','Gently Used','Used','For Parts'];
 const POSTED_WITHIN: PostedWithin[] = ['All Time','Today','3 Days','Week','Month'];
@@ -69,8 +86,10 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
 export default function Home() {
   const router = useRouter();
   const { width } = useWindowDimensions();
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, toggleTheme } = useTheme();
   const { lang, t, translateUGC } = useLanguage();
+  // ✨ ADD THIS LINE
+  const insets = useSafeAreaInsets();
 
   const [safetyModalVisible, setSafetyModalVisible] = useState(false);
   const [isNotifModalVisible, setIsNotifModalVisible] = useState(false);
@@ -138,6 +157,7 @@ export default function Home() {
   const fetchSavedItemsRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
   const fetchSmartLocationRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
   const queueUnreadCountRefreshRef = useRef<(userId: string) => void>(() => {});
+  
 
   const numColumns = width > 1024 ? 4 : width > 768 ? 3 : 2;
 
@@ -149,48 +169,110 @@ export default function Home() {
     activePostedWithin !== 'All Time',
   ].filter(Boolean).length;
 
-  const Skeleton = ({ width, height, style, borderRadius = 8 }: { width: any, height: any, style?: any, borderRadius?: number }) => {
-    const fadeAnim = useRef(new Animated.Value(0.5)).current;
-    
-    useEffect(() => {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(fadeAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-          Animated.timing(fadeAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
-        ])
-      ).start();
-    }, [fadeAnim]);
+  
+  useEffect(() => {
+    if (openProfile === 'true') {
+      openProfileModal();
+    }
+  }, [openProfile]);
 
-    return (
-      <Animated.View 
-        style={[
-          { width, height, backgroundColor: isDark ? '#333' : '#e0e0e0', borderRadius, opacity: fadeAnim }, 
-          style
-        ]} 
-      />
-    );
+  const SkeletonCard = ({ numColumns, width }: { numColumns: number, width: number }) => {
+  const { isDark } = useTheme();
+  
+  // 1. Set up the animation loop
+  const animatedValue = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(animatedValue, {
+        toValue: 1,
+        duration: 1200,
+        useNativeDriver: true,
+      })
+    ).start();
+  }, []);
+
+  // 2. Horizontal slide calculation
+  const translateX = animatedValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-width, width],
+  });
+
+  // 3. Shimmer color palette
+  const baseColor = isDark ? '#1E293B' : '#E2E8F0';
+  const highlightColor = isDark ? '#334155' : '#F8FAFC';
+
+  const cardWidth = numColumns === 1 ? '100%' : (width - 48) / 2;
+  const imageHeight = numColumns === 1 ? 200 : 140;
+
+  // ✨ Clean absolute fill object helper to prevent TS errors
+  const absoluteFillStyle = {
+    position: 'absolute' as const,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   };
 
-  const SkeletonCard = ({ numColumns, width }: { numColumns: number, width: number }) => (
-    <View style={[
-      styles.card, 
-      { backgroundColor: colors.card, borderColor: colors.border },
-      numColumns > 1 && { flex: 1, maxWidth: width > 1024 ? '23%' : width > 768 ? '31%' : '48%' }
-    ]}>
-      <Skeleton width="100%" height={120} borderRadius={0} /> 
-      <View style={styles.cardContent}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-          <Skeleton width="40%" height={20} />
-          <Skeleton width={26} height={26} borderRadius={13} />
-        </View>
-        <Skeleton width="80%" height={14} style={{ marginBottom: 12 }} />
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-          <Skeleton width={12} height={12} borderRadius={6} />
-          <Skeleton width="60%" height={12} />
-        </View>
+  return (
+    <View style={{ width: cardWidth, marginBottom: 16 }}>
+      {/* Image Skeleton Block */}
+      <View style={{ 
+        height: imageHeight, 
+        backgroundColor: baseColor, 
+        borderRadius: 12, 
+        overflow: 'hidden',
+        marginBottom: 8 
+      }}>
+        <Animated.View style={[absoluteFillStyle, { transform: [{ translateX }] }]}>
+          <LinearGradient
+            colors={['transparent', highlightColor, 'transparent']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={absoluteFillStyle}
+          />
+        </Animated.View>
+      </View>
+
+      {/* Title Text Skeleton Block */}
+      <View style={{ 
+        height: 16, 
+        backgroundColor: baseColor, 
+        borderRadius: 4, 
+        overflow: 'hidden',
+        marginBottom: 6,
+        width: '80%' 
+      }}>
+        <Animated.View style={[absoluteFillStyle, { transform: [{ translateX }] }]}>
+          <LinearGradient
+            colors={['transparent', highlightColor, 'transparent']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={absoluteFillStyle}
+          />
+        </Animated.View>
+      </View>
+
+      {/* Price Text Skeleton Block */}
+      <View style={{ 
+        height: 16, 
+        backgroundColor: baseColor, 
+        borderRadius: 4, 
+        overflow: 'hidden',
+        width: '40%' 
+      }}>
+        <Animated.View style={[absoluteFillStyle, { transform: [{ translateX }] }]}>
+          <LinearGradient
+            colors={['transparent', highlightColor, 'transparent']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={absoluteFillStyle}
+          />
+        </Animated.View>
       </View>
     </View>
   );
+};
 
   useEffect(() => {
     if (activeLocation === 'Auto') {
@@ -297,24 +379,35 @@ export default function Home() {
         }
 
         const geocode = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
-        if (geocode.length > 0) return (geocode[0].city || geocode[0].district || geocode[0].subregion);
+        if (geocode.length > 0) {
+          const geo = geocode[0];
+          // Grab the most granular area possible
+          const area = geo.district || geo.subregion || geo.street || '';
+          // Grab the city or fallback to region
+          const city = geo.city || geo.region || '';
+          const state = geo.region || '';
+          return { area, city, state };
+        }
         throw new Error('no_geocode');
       };
 
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject('timeout'), 3000));
 
-      let city: string | null = null;
+      let locData: any = null;
       try {
-        city = await Promise.race([getGps(), timeoutPromise]) as string;
+        locData = await Promise.race([getGps(), timeoutPromise]);
       } catch (err) {
+        // Fallback to IP-based location if GPS fails
         const res = await fetch('https://ipinfo.io/json');
         const data = await res.json();
-        if (data.city) city = data.city;
+        if (data.city) locData = { city: data.city, state: data.region || '', area: '' };
       }
 
-      if (city) {
-        setActiveLocation(city);
-        setUserCity(city);
+      if (locData) {
+        setActiveLocation('Auto');
+        setUserArea(locData.area);
+        setUserCity(locData.city);
+        setUserState(locData.state);
       }
     } catch (err) {
       console.log('Smart Loc Error:', err);
@@ -322,55 +415,46 @@ export default function Home() {
   };
 
   const fetchListings = async ({ force = false, pullToRefresh = false }: { force?: boolean; pullToRefresh?: boolean } = {}) => {
-    if (pullToRefresh) setRefreshing(true);
-    else if (listings.length === 0) setLoading(true);
+  if (pullToRefresh) setRefreshing(true);
+  else if (listings.length === 0) setLoading(true);
 
-    try {
-      const user = await getCurrentUser();
-      let blockedIds: string[] = [];
-      if (user) {
-        const { data: blockedData } = await supabase.from('blocked_users').select('blocked_id').eq('blocker_id', user.id);
-        if (blockedData) blockedIds = blockedData.map(b => b.blocked_id);
-      }
-
-      let query = supabase
-        .from('listings')
-        .select('*')
-        .eq('is_sold', false)
-        .or('approval_status.eq.approved,approval_status.is.null')
-        .gte('expires_at', new Date().toISOString())
-        .order('created_at', { ascending: false });
-
-      if (blockedIds.length > 0) {
-        query = query.not('seller_id', 'in', `(${blockedIds.join(',')})`);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      let finalData = data || [];
-
-      if (searchQuery.trim().length > 0) {
-        const queryText = searchQuery.toLowerCase();
-        finalData = finalData.filter((item: any) => 
-          item.title?.toLowerCase().includes(queryText) || 
-          item.translations?.ur?.title?.toLowerCase().includes(queryText) ||
-          item.description?.toLowerCase().includes(queryText)
-        );
-      }
-
-      setListings(finalData);
-      try {
-        applyFilters(searchQuery, selectedCategory, activeLocation, finalData, userArea, userCity, userState, activeSort, activePriceMin, activePriceMax, activeCondition, activePostedWithin);
-      } catch (err: any) {
-        console.error("FILTER CRASH:", err);
-      }
-    } catch (err: any) {
-      console.error('Fetch error:', err);
+  try {
+    const user = await getCurrentUser();
+    let blockedIds: string[] = [];
+    if (user) {
+      const { data: blockedData } = await supabase.from('blocked_users').select('blocked_id').eq('blocker_id', user.id);
+      if (blockedData) blockedIds = blockedData.map(b => b.blocked_id);
     }
+
+    // ✨ Resilient query: handles NULL values properly
+    let query = supabase
+      .from('listings')
+      .select('*')
+      .or('is_sold.eq.false,is_sold.is.null')
+      .order('created_at', { ascending: false });
+
+    if (blockedIds.length > 0) {
+      query = query.not('seller_id', 'in', `(${blockedIds.join(',')})`);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
     
-    setLoading(false);
-    setRefreshing(false);
-  };
+    let finalData = data || [];
+
+    setListings(finalData);
+    applyFilters(
+      searchQuery, selectedCategory, activeLocation, finalData, 
+      userArea, userCity, userState, 
+      activeSort, activePriceMin, activePriceMax, activeCondition, activePostedWithin
+    );
+  } catch (err: any) {
+    console.error('Fetch error:', err);
+  }
+  
+  setLoading(false);
+  setRefreshing(false);
+};
 
   const applyFilters = (
     query:        string,
@@ -862,12 +946,13 @@ export default function Home() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
 
       {/* ── HEADER ────────────────────────────── */}
-      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+      <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border, paddingTop: insets.top + 10 }]}>
         
         {/* ✨ BRAND LOGO */}
         <Image 
-          source={isDark ? require('../assets/images/logo-dark.png') : require('../assets/images/logo-light.png')} 
-          style={{ width: 110, height: 35 }} 
+          // We flipped the logic here so the white-text logo shows in Dark Mode!
+          source={isDark ? require('../assets/images/logo-light.png') : require('../assets/images/logo-dark.png')} 
+          style={{ width: 145, height: 45 }} // Increased the size for better readability
           contentFit="contain"
           transition={200}
         />
@@ -915,7 +1000,7 @@ export default function Home() {
           <Ionicons name="location" size={20} color={colors.text} />
           <Text style={[styles.locationSelectorText, { color: colors.text }]} numberOfLines={1}>
             {activeLocation === 'Auto' 
-              ? (userArea || userCity || t('auto_loc')) 
+              ? ((userArea && userCity && userArea !== userCity) ? `${userArea}, ${userCity}` : (userArea || userCity || t('auto_loc')))
               : activeLocation === 'All India' 
                 ? t('all_india') 
                 : translateUGC(activeLocation)
@@ -1023,18 +1108,19 @@ export default function Home() {
       )}
 
       {/* ── FEED ──────────────────────────────── */}
-      {loading || (activeLocation === 'Auto' && !userCity) ? (
-        <FlatList
-          key={`skeleton-grid-${numColumns}`}
-          numColumns={numColumns}
-          columnWrapperStyle={numColumns > 1 ? { gap: 16 } : undefined}
-          data={[1, 2, 3, 4, 5, 6, 7, 8]}
-          keyExtractor={(item) => String(item)}
-          renderItem={() => <SkeletonCard numColumns={numColumns} width={width} />}
-          contentContainerStyle={styles.listContainer}
-          showsVerticalScrollIndicator={false}
-        />
-      ) : filteredListings.length === 0 ? (
+      // ✅ NEW:
+{loading ? (
+  <FlatList
+    key={`skeleton-grid-${numColumns}`}
+    numColumns={numColumns}
+    columnWrapperStyle={numColumns > 1 ? { gap: 16 } : undefined}
+    data={[1, 2, 3, 4, 5, 6, 7, 8]}
+    keyExtractor={(item) => String(item)}
+    renderItem={() => <SkeletonCard numColumns={numColumns} width={width} />}
+    contentContainerStyle={styles.listContainer}
+    showsVerticalScrollIndicator={false}
+  />
+) : filteredListings.length === 0 ? (
         <View style={styles.emptyState}>
           <View style={[styles.emptyIconWrapper, { backgroundColor: colors.backgroundSecondary }]}>
             <Ionicons name="search-outline" size={44} color={colors.textSecondary} />
@@ -1076,7 +1162,7 @@ export default function Home() {
 
       {/* ── BOTTOM TAB BAR ────────────────────── */}
       {Platform.OS !== 'web' && width <= 768 && (
-        <View style={[styles.bottomTabBar, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
+        <View style={[styles.bottomTabBar, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: insets.bottom > 0 ? insets.bottom : 10, height: 60 + insets.bottom }]}>
           <TouchableOpacity style={styles.tabItem} onPress={() => {}}>
             <Ionicons name="home" size={24} color={colors.text} />
             <Text style={[styles.tabText, { color: colors.text, fontWeight: 'bold' }]}>{t('tab_home')}</Text>
@@ -1317,36 +1403,10 @@ export default function Home() {
                       {t('profile_no_username')}
                     </Text>
                   )}
-                  <TouchableOpacity style={styles.profileEditIconBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/profile' as any); }}>
-                    <Ionicons name="pencil" size={14} color="#007AFF" />
-                  </TouchableOpacity>
-                </View>
-
-                {/* ✨ CONTACT INFO ✨ */}
-                <View style={[styles.profileDetailsBox, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
-                  <View style={styles.profileDetailRow}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-                      <Ionicons name="mail" size={20} color={colors.textSecondary} />
-                      <Text style={[styles.profileDetailText, { color: colors.text }]}>{profileData?.email || t('profile_no_email') || 'No Email Added'}</Text>
-                    </View>
-                    <TouchableOpacity onPress={() => { setIsProfileMenuVisible(false); setIsEmailModalVisible(true); }} style={{ backgroundColor: colors.card, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 }}>
-                      <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#007AFF' }}>{profileData?.email ? t('edit') : t('add')}</Text>  
-                    </TouchableOpacity>
-                  </View>
-                  <View style={styles.profileDetailRow}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-                      <Ionicons name="call" size={20} color={colors.textSecondary} />
-                      <Text style={[styles.profileDetailText, { color: colors.text }]}>{profileData?.phone || t('profile_no_phone') || 'No phone number'}</Text>
-                    </View>
-                    <TouchableOpacity onPress={() => { setIsProfileMenuVisible(false); setIsPhoneModalVisible(true); }} style={{ backgroundColor: colors.card, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 }}>
-                      <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#007AFF' }}>{profileData?.phone ? t('edit') || 'Edit' : t('add') || 'Add'}</Text>  
-                    </TouchableOpacity>
-                  </View>
                 </View>
 
                 {/* ✨ PREFERENCES ✨ */}
                 <View style={[styles.profileActionDivider, { backgroundColor: colors.border }]} />
-                <Text style={styles.modalSectionLabel}>Preferences</Text>
 
                 <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/profile' as any); }}>
                   <View style={[styles.profileActionIconWrap, { backgroundColor: colors.backgroundSecondary }]}><Ionicons name="globe-outline" size={22} color={colors.text} /></View>
@@ -1360,56 +1420,69 @@ export default function Home() {
                   <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
                 </TouchableOpacity>
 
-                {/* ✨ MERGED HELP & SUPPORT ✨ */}
+                <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/billing' as any); }}>
+                  <View style={[styles.profileActionIconWrap, { backgroundColor: colors.backgroundSecondary }]}><Ionicons name="card" size={22} color={colors.text} /></View>
+                  <Text style={[styles.profileActionText, { color: colors.text }]}>{t('billing_sub') || 'Billing & Subscriptions'}</Text>
+                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
+                </TouchableOpacity>
+
+                {/* ✨ NEW BILLING HISTORY BUTTON ✨ */}
+                <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/billing-history' as any); }}>
+                  <View style={[styles.profileActionIconWrap, { backgroundColor: colors.backgroundSecondary }]}><Ionicons name="receipt-outline" size={22} color={colors.text} /></View>
+                  <Text style={[styles.profileActionText, { color: colors.text }]}>Billing History</Text>
+                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
+                </TouchableOpacity>
+
+                {/* ✨ EXPANDABLE HELP & SUPPORT ✨ */}
                 <View style={[styles.profileActionDivider, { backgroundColor: colors.border }]} />
-                <Text style={styles.modalSectionLabel}>Help & Support</Text>
 
-                <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); setSafetyModalVisible(true); }}>
-                  <View style={[styles.profileActionIconWrap, { backgroundColor: '#e8f5e9' }]}><Ionicons name="shield-checkmark" size={22} color="#4CAF50" /></View>
-                  <Text style={[styles.profileActionText, { color: colors.text }]}>{t('safety_tips') === 'safety_tips' ? 'Trust & Safety Tips' : t('safety_tips')}</Text>
-                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
+                <TouchableOpacity style={styles.profileActionBtn} onPress={() => setIsHelpExpanded(!isHelpExpanded)}>
+                  <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#1e3a8a' : '#e3f2fd' }]}><Ionicons name="help-buoy" size={22} color="#2196F3" /></View>
+                  <Text style={[styles.profileActionText, { color: colors.text }]}>Help & Support</Text>
+                  <Ionicons name={isHelpExpanded ? "chevron-down" : "chevron-forward"} size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); Linking.openURL('mailto:support@boltzy.in?subject=Boltzy Support Request'); }}>
-                  <View style={[styles.profileActionIconWrap, { backgroundColor: '#e3f2fd' }]}><Ionicons name="mail" size={22} color="#2196F3" /></View>
-                  <Text style={[styles.profileActionText, { color: colors.text }]}>{t('email_support') === 'email_support' ? 'Email Support' : t('email_support')}</Text>
-                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
-                </TouchableOpacity>
+                {isHelpExpanded && (
+                  
+                  <View style={{ width: '100%', paddingLeft: 12, marginBottom: 8 }}>
 
-                <TouchableOpacity style={styles.profileActionBtn} onPress={async () => { 
-                  setIsProfileMenuVisible(false); 
-                  try { await Share.share({ message: 'Hey! Join Boltzy to buy and sell awesome items locally. Download the app now: https://boltzy.in' }); } catch (e) {}
-                }}>
-                  <View style={[styles.profileActionIconWrap, { backgroundColor: '#f3e5f5' }]}><Ionicons name="person-add" size={22} color="#9C27B0" /></View>
-                  <Text style={[styles.profileActionText, { color: colors.text }]}>{t('invite_friends') === 'invite_friends' ? 'Invite Friends' : t('invite_friends')}</Text>
-                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
-                </TouchableOpacity>
+                    {/* ✨ NEW FAQ BUTTON ✨ */}
+                    <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/faq' as any); }}>
+                      <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#422006' : '#fff8e1', width: 32, height: 32, borderRadius: 16 }]}><Ionicons name="help-circle" size={18} color="#F5A623" /></View>
+                      <Text style={[styles.profileActionText, { color: colors.text, fontSize: 15 }]}>FAQ</Text>
+                    </TouchableOpacity>
 
-                {/* ✨ ACCOUNT ACTIONS ✨ */}
+                    <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); setSafetyModalVisible(true); }}>
+                      <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#064e3b' : '#e8f5e9', width: 32, height: 32, borderRadius: 16 }]}><Ionicons name="shield-checkmark" size={18} color="#4CAF50" /></View>
+                      <Text style={[styles.profileActionText, { color: colors.text, fontSize: 15 }]}>{t('safety_tips') === 'safety_tips' ? 'Trust & Safety Tips' : t('safety_tips')}</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); Linking.openURL('mailto:support@boltzy.in?subject=Boltzy Support Request'); }}>
+                      <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#1e3a8a' : '#e3f2fd', width: 32, height: 32, borderRadius: 16 }]}><Ionicons name="mail" size={18} color="#2196F3" /></View>
+                      <Text style={[styles.profileActionText, { color: colors.text, fontSize: 15 }]}>{t('email_support') === 'email_support' ? 'Email Support' : t('email_support')}</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity style={styles.profileActionBtn} onPress={async () => { setIsProfileMenuVisible(false); try { await Share.share({ message: 'Hey! Join Boltzy to buy and sell awesome items locally. Download the app now: https://boltzy.in' }); } catch (e) {} }}>
+                      <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#4a044e' : '#f3e5f5', width: 32, height: 32, borderRadius: 16 }]}><Ionicons name="person-add" size={18} color="#9C27B0" /></View>
+                      <Text style={[styles.profileActionText, { color: colors.text, fontSize: 15 }]}>{t('invite_friends') === 'invite_friends' ? 'Invite Friends' : t('invite_friends')}</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {/* ✨ LOGOUT ✨ */}
                 <View style={[styles.profileActionDivider, { backgroundColor: colors.border }]} />
 
                 <TouchableOpacity style={styles.profileActionBtn} onPress={handleLogout}>
-                  <View style={[styles.profileActionIconWrap, { backgroundColor: colors.backgroundSecondary }]}><Ionicons name="log-out" size={22} color={colors.text} /></View>
-                  <Text style={[styles.profileActionText, { color: colors.text }]}>{t('logout') || 'Logout'}</Text>
-                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
+                  <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#450a0a' : '#ffebee' }]}><Ionicons name="log-out" size={22} color="#FF3B30" /></View>
+                  <Text style={[styles.profileActionText, { color: '#FF3B30' }]}>{t('logout') || 'Logout'}</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.profileActionBtn} onPress={handleLogoutAllDevices}>
-                  <View style={[styles.profileActionIconWrap, { backgroundColor: colors.backgroundSecondary }]}><Ionicons name="desktop-outline" size={22} color={colors.text} /></View>
-                  <Text style={[styles.profileActionText, { color: colors.text }]}>{t('logout_all') || 'Logout from All Devices'}</Text>
-                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.profileActionBtnDanger} onPress={handleDeleteAccount}>
-                  <View style={[styles.profileActionIconWrap, { backgroundColor: '#ffebee' }]}><Ionicons name="trash" size={22} color="#FF3B30" /></View>
-                  <Text style={styles.profileActionTextDanger}>{t('delete_acc') || 'Delete Account'}</Text>
-                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
-                </TouchableOpacity>
               </ScrollView>
             )}
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
 
       {/* ════════════ LOCATION MODAL ════════════ */}
       <Modal visible={isLocationModalVisible} transparent animationType="slide">
@@ -1556,13 +1629,53 @@ export default function Home() {
         onCancel={() => setConfirmModalVisible(false)}
       />
 
+{/* ════════════ NOTIFICATIONS MODAL ════════════ */}
+<Modal visible={isNotifModalVisible} transparent animationType="slide">
+  <View style={styles.modalOverlay}>
+    <View style={[styles.locationModalCard, { backgroundColor: colors.card, height: '80%', paddingBottom: insets.bottom + 20 }]}>
+      
+      <View style={styles.helpHeader}>
+        <Text style={[styles.helpTitle, { color: colors.text }]}>Notifications</Text>
+        <TouchableOpacity onPress={() => setIsNotifModalVisible(false)}>
+          <Ionicons name="close" size={26} color={colors.text} />
+        </TouchableOpacity>
+      </View>
+      
+      {notifications.length === 0 ? (
+        <View style={styles.emptyState}>
+          <View style={[styles.emptyIconWrapper, { backgroundColor: colors.backgroundSecondary }]}>
+            <Ionicons name="notifications-off-outline" size={44} color={colors.textSecondary} />
+          </View>
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>No new notifications</Text>
+          <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>We'll let you know when you get messages or updates.</Text>
+        </View>
+      ) : (
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+          {notifications.map(notif => (
+            <TouchableOpacity key={notif.id} style={[styles.notifCard, { borderBottomColor: colors.border }]} activeOpacity={0.7}>
+              <View style={[styles.notifIconWrap, { backgroundColor: notif.color + '20' }]}>
+                <Ionicons name={notif.icon as any} size={24} color={notif.color} />
+              </View>
+              <View style={styles.notifContent}>
+                <Text style={[styles.notifTitle, { color: colors.text }]}>{notif.title}</Text>
+                <Text style={[styles.notifMsg, { color: colors.textSecondary }]}>{notif.message}</Text>
+                <Text style={[styles.notifTime, { color: colors.textSecondary }]}>{notif.time}</Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
+    </View>
+  </View>
+</Modal>
+
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container:        { flex: 1 },
-  header:           { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, paddingTop: Platform.OS === 'ios' ? 50 : 20 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 },
   headerTitle:      { fontSize: 26, fontWeight: 'bold', letterSpacing: -0.5 },
 
   locationSelectorBar:  { paddingHorizontal: 16, paddingBottom: 10 },
@@ -1645,7 +1758,7 @@ const styles = StyleSheet.create({
   emptyActionBtn:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, paddingVertical: 10, backgroundColor: '#e8f0fe', borderRadius: 20 },
   emptyActionText:   { color: '#007AFF', fontSize: 14, fontWeight: '600' },
 
-  bottomTabBar:           { flexDirection: 'row', height: Platform.OS === 'ios' ? 85 : 70, borderTopWidth: 1, paddingHorizontal: 5, alignItems: 'flex-start', paddingTop: 10, justifyContent: 'space-between' },
+  bottomTabBar:           { flexDirection: 'row', borderTopWidth: 1, paddingHorizontal: 5, alignItems: 'flex-start', paddingTop: 10, justifyContent: 'space-between' },
   tabItem:                { alignItems: 'center', justifyContent: 'center', flex: 1 },
   tabText:                { fontSize: 10, marginTop: 4, fontWeight: '500' },
   tabItemPost:            { alignItems: 'center', justifyContent: 'center', flex: 1, marginTop: -25 },
@@ -1713,7 +1826,7 @@ const styles = StyleSheet.create({
   profileModalName:        { fontSize: 24, fontWeight: 'bold', marginBottom: 4, textAlign: 'center' },
   profileUsernameRow:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 24, gap: 8 },
   profileModalUsernameText:{ fontSize: 16, fontWeight: '500' },
-  profileEditIconBtn:      { backgroundColor: '#E8F0FE', padding: 8, borderRadius: 12 },
+  profileEditIconBtn:      { padding: 8, borderRadius: 12 },
   profileDetailsBox:       { width: '100%', borderRadius: 16, padding: 16, marginBottom: 24, borderWidth: 1 },
   profileDetailRow:        { flexDirection: 'row', alignItems: 'center', marginVertical: 8, gap: 12 },
   profileDetailText:       { fontSize: 16, fontWeight: '500' },
@@ -1735,6 +1848,13 @@ const styles = StyleSheet.create({
   quickCitiesWrapper: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   quickCityChip:      { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderWidth: 1, borderRadius: 20 },
   quickCityText:      { fontSize: 14 },
+
+notifCard: { flexDirection: 'row', paddingVertical: 16, borderBottomWidth: 1 },
+  notifIconWrap: { width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  notifContent: { flex: 1, justifyContent: 'center' },
+  notifTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 4 },
+  notifMsg: { fontSize: 14, lineHeight: 20, marginBottom: 6 },
+  notifTime: { fontSize: 12, fontStyle: 'italic' },
 
   helpMenuCard:   { width: '90%', borderRadius: 16, padding: 24, marginBottom: 40 },
   helpHeader:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
