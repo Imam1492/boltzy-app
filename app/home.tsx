@@ -37,18 +37,6 @@ const SORT_OPTIONS: { key: SortOption; label: string; icon: string }[] = [
   { key: 'price_desc', label: 'Price: High to Low',   icon: 'trending-down-outline'},
 ];
 
-const [notifications, setNotifications] = useState([
-    { id: '1', title: 'Ad is Live! 🎉', message: 'Your ad went live successfully.', icon: 'checkmark-circle', color: '#34C759', time: 'Just now' },
-    { id: '2', title: 'Action Required', message: 'Modify your ad to make it live. It may violate community guidelines.', icon: 'alert-circle', color: '#F5A623', time: '2 hours ago' },
-    { id: '3', title: 'Ad Expired', message: 'Your ad has expired. Relist it to keep selling!', icon: 'time', color: '#8E8E93', time: '1 day ago' },
-    { id: '4', title: 'Ad Deleted', message: 'Your ad has been successfully deleted.', icon: 'trash', color: '#FF3B30', time: '2 days ago' },
-    { id: '5', title: 'Security Alert', message: 'Your password was changed successfully.', icon: 'lock-closed', color: '#007AFF', time: '3 days ago' },
-    { id: '6', title: 'Report Submitted', message: 'Your report against an ad/user was submitted to our moderation team.', icon: 'flag', color: '#007AFF', time: '1 week ago' },
-    { id: '7', title: 'Account Warning', message: 'You have been reported. Please contact support to resolve the issue.', icon: 'warning', color: '#FF3B30', time: '1 week ago' }
-  ]);
-
-  const { openProfile } = useLocalSearchParams();
-  const [isHelpExpanded, setIsHelpExpanded] = useState(false);
 
 const CONDITIONS: Condition[] = ['All','New','Like New','Gently Used','Used','For Parts'];
 const POSTED_WITHIN: PostedWithin[] = ['All Time','Today','3 Days','Week','Month'];
@@ -148,6 +136,19 @@ export default function Home() {
     setPendingConfirmAction({ action });
     setConfirmModalVisible(true);
   };
+
+  const [notifications, setNotifications] = useState([
+    { id: '1', title: 'Ad is Live! 🎉', message: 'Your ad went live successfully.', icon: 'checkmark-circle', color: '#34C759', time: 'Just now' },
+    { id: '2', title: 'Action Required', message: 'Modify your ad to make it live. It may violate community guidelines.', icon: 'alert-circle', color: '#F5A623', time: '2 hours ago' },
+    { id: '3', title: 'Ad Expired', message: 'Your ad has expired. Relist it to keep selling!', icon: 'time', color: '#8E8E93', time: '1 day ago' },
+    { id: '4', title: 'Ad Deleted', message: 'Your ad has been successfully deleted.', icon: 'trash', color: '#FF3B30', time: '2 days ago' },
+    { id: '5', title: 'Security Alert', message: 'Your password was changed successfully.', icon: 'lock-closed', color: '#007AFF', time: '3 days ago' },
+    { id: '6', title: 'Report Submitted', message: 'Your report against an ad/user was submitted to our moderation team.', icon: 'flag', color: '#007AFF', time: '1 week ago' },
+    { id: '7', title: 'Account Warning', message: 'You have been reported. Please contact support to resolve the issue.', icon: 'warning', color: '#FF3B30', time: '1 week ago' }
+  ]);
+
+  const { openProfile } = useLocalSearchParams();
+  const [isHelpExpanded, setIsHelpExpanded] = useState(false);
 
   const [isListening, setIsListening]             = useState(false);
   const [voiceModalVisible, setVoiceModalVisible] = useState(false);
