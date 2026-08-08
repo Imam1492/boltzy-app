@@ -148,7 +148,6 @@ export default function Home() {
   ]);
 
   const { openProfile } = useLocalSearchParams();
-  const [isHelpExpanded, setIsHelpExpanded] = useState(false);
 
   const [isListening, setIsListening]             = useState(false);
   const [voiceModalVisible, setVoiceModalVisible] = useState(false);
@@ -951,9 +950,9 @@ export default function Home() {
         
         {/* ✨ BRAND LOGO */}
         <Image 
-          // We flipped the logic here so the white-text logo shows in Dark Mode!
           source={isDark ? require('../assets/images/logo-light.png') : require('../assets/images/logo-dark.png')} 
-          style={{ width: 145, height: 45 }} // Increased the size for better readability
+          // ✨ Increased dimensions for tagline readability & pulled the bottom margin up!
+          style={{ width: 185, height: 60, marginBottom: -10, marginLeft: -4 }} 
           contentFit="contain"
           transition={200}
         />
@@ -1421,11 +1420,6 @@ export default function Home() {
                   <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/billing' as any); }}>
-                  <View style={[styles.profileActionIconWrap, { backgroundColor: colors.backgroundSecondary }]}><Ionicons name="card" size={22} color={colors.text} /></View>
-                  <Text style={[styles.profileActionText, { color: colors.text }]}>{t('billing_sub') || 'Billing & Subscriptions'}</Text>
-                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
-                </TouchableOpacity>
 
                 {/* ✨ NEW BILLING HISTORY BUTTON ✨ */}
                 <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/billing-history' as any); }}>
@@ -1434,41 +1428,14 @@ export default function Home() {
                   <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
                 </TouchableOpacity>
 
-                {/* ✨ EXPANDABLE HELP & SUPPORT ✨ */}
+                {/* ✨ HELP & SUPPORT ✨ */}
                 <View style={[styles.profileActionDivider, { backgroundColor: colors.border }]} />
 
-                <TouchableOpacity style={styles.profileActionBtn} onPress={() => setIsHelpExpanded(!isHelpExpanded)}>
+                <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/help' as any); }}>
                   <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#1e3a8a' : '#e3f2fd' }]}><Ionicons name="help-buoy" size={22} color="#2196F3" /></View>
                   <Text style={[styles.profileActionText, { color: colors.text }]}>Help & Support</Text>
-                  <Ionicons name={isHelpExpanded ? "chevron-down" : "chevron-forward"} size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
+                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
                 </TouchableOpacity>
-
-                {isHelpExpanded && (
-                  
-                  <View style={{ width: '100%', paddingLeft: 12, marginBottom: 8 }}>
-
-                    {/* ✨ NEW FAQ BUTTON ✨ */}
-                    <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/faq' as any); }}>
-                      <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#422006' : '#fff8e1', width: 32, height: 32, borderRadius: 16 }]}><Ionicons name="help-circle" size={18} color="#F5A623" /></View>
-                      <Text style={[styles.profileActionText, { color: colors.text, fontSize: 15 }]}>FAQ</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); setSafetyModalVisible(true); }}>
-                      <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#064e3b' : '#e8f5e9', width: 32, height: 32, borderRadius: 16 }]}><Ionicons name="shield-checkmark" size={18} color="#4CAF50" /></View>
-                      <Text style={[styles.profileActionText, { color: colors.text, fontSize: 15 }]}>{t('safety_tips') === 'safety_tips' ? 'Trust & Safety Tips' : t('safety_tips')}</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); Linking.openURL('mailto:support@boltzy.in?subject=Boltzy Support Request'); }}>
-                      <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#1e3a8a' : '#e3f2fd', width: 32, height: 32, borderRadius: 16 }]}><Ionicons name="mail" size={18} color="#2196F3" /></View>
-                      <Text style={[styles.profileActionText, { color: colors.text, fontSize: 15 }]}>{t('email_support') === 'email_support' ? 'Email Support' : t('email_support')}</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity style={styles.profileActionBtn} onPress={async () => { setIsProfileMenuVisible(false); try { await Share.share({ message: 'Hey! Join Boltzy to buy and sell awesome items locally. Download the app now: https://boltzy.in' }); } catch (e) {} }}>
-                      <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#4a044e' : '#f3e5f5', width: 32, height: 32, borderRadius: 16 }]}><Ionicons name="person-add" size={18} color="#9C27B0" /></View>
-                      <Text style={[styles.profileActionText, { color: colors.text, fontSize: 15 }]}>{t('invite_friends') === 'invite_friends' ? 'Invite Friends' : t('invite_friends')}</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
 
                 {/* ✨ LOGOUT ✨ */}
                 <View style={[styles.profileActionDivider, { backgroundColor: colors.border }]} />

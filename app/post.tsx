@@ -163,8 +163,8 @@ export default function PostAd() {
   const addHighlight = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (highlights.length >= 8) {
-      Toast.show({ type: 'info', text1: t('post_alert_max_highlights_title'), text2: t('post_alert_max_highlights_msg'), position: 'top' });
+    if (highlights.length >= 5) {
+      Toast.show({ type: 'info', text1: 'Limit Reached', text2: 'You can only add up to 5 highlights.', position: 'top' });
       return;
     }
     if (highlights.includes(trimmed)) return;
@@ -177,7 +177,7 @@ export default function PostAd() {
   };
 
   const addSuggestion = (sug: string) => {
-    if (!highlights.includes(sug) && highlights.length < 8) {
+    if (!highlights.includes(sug) && highlights.length < 5) {
       setHighlights(prev => [...prev, sug]);
     }
   };
@@ -305,8 +305,8 @@ export default function PostAd() {
         setMissingFields(prev => prev.filter(f => f !== 'description'));
       }
       if (data?.highlights) {
-        const newHighlights = data.highlights.filter((h: string) => !highlights.includes(h)).slice(0, 8);
-        setHighlights(prev => [...prev, ...newHighlights].slice(0, 8));
+        const newHighlights = data.highlights.filter((h: string) => !highlights.includes(h)).slice(0, 5);
+        setHighlights(prev => [...prev, ...newHighlights].slice(0, 5));
       }
       
     } catch (error: any) {
@@ -457,7 +457,7 @@ export default function PostAd() {
     }
   };
 
-  return (
+ return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border, paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={handleBackPress} style={{ padding: 8 }}>
@@ -645,7 +645,8 @@ export default function PostAd() {
           <View style={styles.highlightsHeader}>
             <Ionicons name="flash" size={18} color="#F5A623" />
             <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 0, marginBottom: 0 }]}>{t('post_highlights_title')}</Text>
-            <Text style={styles.highlightCount}>{highlights.length}/8</Text>
+            {/* ✨ CHANGED TO 5 */}
+            <Text style={styles.highlightCount}>{highlights.length}/5</Text> 
           </View>
           
           <Text style={[styles.sectionHint, { color: colors.textSecondary }]}>{t('post_highlights_hint')}</Text>
@@ -671,7 +672,8 @@ export default function PostAd() {
             </View>
           )}
 
-          {highlights.length < 8 && (
+          {/* ✨ CHANGED TO 5 */}
+          {highlights.length < 5 && ( 
             <View style={styles.highlightInputRow}>
               <TextInput
                 style={[styles.highlightInput, { backgroundColor: colors.card, borderColor: colors.border, color: colors.text }]}
@@ -693,7 +695,8 @@ export default function PostAd() {
             </View>
           )}
 
-          {highlights.length < 8 && (
+          {/* ✨ CHANGED TO 5 */}
+          {highlights.length < 5 && (
             <View>
               <Text style={[styles.suggestLabel, { color: colors.textSecondary }]}>{t('post_highlights_quick_add')}</Text>
               <View style={styles.chipsWrap}>

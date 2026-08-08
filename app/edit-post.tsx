@@ -28,13 +28,19 @@ const insets = useSafeAreaInsets();
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [highlights, setHighlights] = useState<string[]>([]);
+  const [highlightInput, setHighlightInput] = useState('');
+  const [isGeneratingAI, setIsGeneratingAI] = useState(false);
+  const [missingFields, setMissingFields] = useState<string[]>([]);
 
   const fetchListingDetails = useCallback(async () => {
     if (!listingId) return router.back();
     const { data, error } = await supabase.from('listings').select('*').eq('id', listingId).single();
-    if (data && !error) {
+   if (data && !error) {
       setTitle(data.title); setPrice(data.price.toString()); setCategory(data.category);
       setLocation(data.location); setDescription(data.description || '');
+      // ✨ ADD THIS LINE to load existing highlights:
+      setHighlights(data.highlights || []); 
       if (data.image_urls && data.image_urls.length > 0) setImageUri(data.image_urls[0]);
     }
     setLoading(false);
@@ -82,6 +88,8 @@ const insets = useSafeAreaInsets();
         price: parseFloat(price), 
         location, 
         description, 
+        // ✨ ADD THIS LINE to save them to the database:
+        highlights: highlights.length > 0 ? highlights : null,
         image_urls: uploadedImageUrl ? [uploadedImageUrl] : [], 
       }).eq('id', listingId);
 

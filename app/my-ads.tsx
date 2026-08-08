@@ -10,17 +10,17 @@ import { getCurrentUser } from '../utils/auth';
 import { Skeleton } from '../components/ShimmerSkeleton';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-
 export default function MyAds() {
   const router = useRouter();
   const { lang, t, translateUGC } = useLanguage();
- const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
-  
-const insets = useSafeAreaInsets();
+  const { colors, isDark, toggleTheme } = useTheme(); 
+  const insets = useSafeAreaInsets();
 
   const [myListings, setMyListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'Active' | 'Sold' | 'Inactive'>('Active');
+  
+  // ✨ Tab state updated to Active, Pending, Inactive
+  const [activeTab, setActiveTab] = useState<'Active' | 'Pending' | 'Inactive'>('Active');
 
   useEffect(() => {
     fetchMyListings();
@@ -41,13 +41,26 @@ const insets = useSafeAreaInsets();
     setLoading(false);
   };
 
-  const activeAds = myListings.filter(i => (i.approval_status === 'approved' || !i.approval_status) && !i.is_sold);
-  const soldAds = myListings.filter(i => i.is_sold);
-  const inactiveAds = myListings.filter(i => !i.is_sold && ['draft', 'pending', 'rejected', 'action_required'].includes(i.approval_status));
+  const now = new Date().getTime();
+
+  // ✨ STRICT FILTERING LOGIC
+  const activeAds = myListings.filter(i => {
+    const isExpired = i.expires_at ? new Date(i.expires_at).getTime() < now : false;
+    return (i.approval_status === 'approved' || !i.approval_status) && !i.is_sold && !isExpired;
+  });
+
+  const pendingAds = myListings.filter(i => {
+    return ['pending', 'action_required'].includes(i.approval_status) && !i.is_sold;
+  });
+
+  const inactiveAds = myListings.filter(i => {
+    const isExpired = i.expires_at ? new Date(i.expires_at).getTime() < now : false;
+    return i.is_sold || i.approval_status === 'draft' || isExpired;
+  });
 
   const getVisibleAds = () => {
     if (activeTab === 'Active') return activeAds;
-    if (activeTab === 'Sold') return soldAds;
+    if (activeTab === 'Pending') return pendingAds;
     return inactiveAds;
   };
 
@@ -200,11 +213,12 @@ const insets = useSafeAreaInsets();
     const isRejected = item.approval_status === 'rejected' || item.approval_status === 'action_required';
     const isApproved = item.approval_status === 'approved' || !item.approval_status; 
     const isDraft = item.approval_status === 'draft';
+    const isExpired = item.expires_at ? new Date(item.expires_at).getTime() < new Date().getTime() : false;
 
     return (
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }, item.is_premium && { borderColor: '#F5A623', borderWidth: 2 }, isRejected && { borderColor: '#FF3B30', borderWidth: 1 }]}>
-        <TouchableOpacity style={styles.cardMain} onPress={() => isApproved ? router.push(`/listing/${item.id}` as any) : null} activeOpacity={isApproved ? 0.7 : 1}>
-          {imageUrl ? ( <Image source={{ uri: imageUrl }} style={[styles.image, (isPending || isRejected || isDraft) && { opacity: 0.5 }]} /> ) : ( <View style={[styles.image, { backgroundColor: colors.backgroundSecondary }]} /> )}
+        <TouchableOpacity style={styles.cardMain} onPress={() => isApproved && !isExpired ? router.push(`/listing/${item.id}` as any) : null} activeOpacity={isApproved && !isExpired ? 0.7 : 1}>
+          {imageUrl ? ( <Image source={{ uri: imageUrl }} style={[styles.image, (isPending || isRejected || isDraft || isExpired || item.is_sold) && { opacity: 0.5 }]} /> ) : ( <View style={[styles.image, { backgroundColor: colors.backgroundSecondary }]} /> )}
           
           <View style={styles.details}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -213,9 +227,9 @@ const insets = useSafeAreaInsets();
                 <Text style={[styles.price, { color: colors.text }]}>₹{item.price}</Text>
               </View>
               
-              <View style={[styles.statusBadge, isPending && {backgroundColor: isDark ? '#422006' : '#FFFBEB'}, isRejected && {backgroundColor: isDark ? '#450a0a' : '#FEF2F2'}, isDraft && {backgroundColor: colors.backgroundSecondary}]}>
-                <Text style={[styles.statusText, isPending && {color: isDark ? '#fde047' : '#D97706'}, isRejected && {color: '#FF3B30'}, isDraft && {color: colors.textSecondary}]}>
-                  {item.is_sold ? 'Sold' : isDraft ? 'Draft' : isPending ? 'Pending' : isRejected ? 'Rejected' : 'Active'}
+              <View style={[styles.statusBadge, isPending && {backgroundColor: isDark ? '#422006' : '#FFFBEB'}, isRejected && {backgroundColor: isDark ? '#450a0a' : '#FEF2F2'}, (isDraft || isExpired || item.is_sold) && {backgroundColor: colors.backgroundSecondary}]}>
+                <Text style={[styles.statusText, isPending && {color: isDark ? '#fde047' : '#D97706'}, isRejected && {color: '#FF3B30'}, (isDraft || isExpired || item.is_sold) && {color: colors.textSecondary}]}>
+                  {item.is_sold ? 'Sold' : isExpired ? 'Expired' : isDraft ? 'Draft' : isPending ? 'Pending' : isRejected ? 'Action Required' : 'Active'}
                 </Text>
               </View>
             </View>
@@ -240,13 +254,13 @@ const insets = useSafeAreaInsets();
           </View>
         )}
 
-        {isApproved && !item.is_premium && !item.is_sold && (
+        {isApproved && !item.is_premium && !item.is_sold && !isExpired && (
           <TouchableOpacity style={[styles.promoteBanner, { backgroundColor: isDark ? '#3d2e00' : '#FFFDF5', borderTopColor: colors.border }]} onPress={() => handlePromoteAd(item)}>
             <Ionicons name="star" size={16} color="#F5A623" />
             <Text style={styles.promoteBannerText}>Promote Ad to Top (₹249)</Text>
           </TouchableOpacity>
         )}
-        {isApproved && item.is_premium && !item.is_sold && (
+        {isApproved && item.is_premium && !item.is_sold && !isExpired && (
           <View style={styles.promotedBadge}>
             <Ionicons name="checkmark-circle" size={16} color="#fff" />
             <Text style={styles.promotedBadgeText}>Promoted (Gold Status)</Text>
@@ -254,12 +268,12 @@ const insets = useSafeAreaInsets();
         )}
 
         <View style={[styles.actionRow, { borderTopColor: colors.border }]}>
-          {!item.is_sold && isApproved && (
+          {(!item.is_sold && isApproved && !isExpired) && (
             <TouchableOpacity style={styles.actionBtn} onPress={() => toggleSoldStatus(item.id, item.is_sold)}>
               <Text style={[styles.actionBtnText, { color: colors.text }]}>Mark Sold</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[styles.actionBtn, (!item.is_sold && isApproved) && [styles.borderLeft, { borderLeftColor: colors.border }]]} onPress={() => router.push(`/edit-post?id=${item.id}` as any)}>
+          <TouchableOpacity style={[styles.actionBtn, (!item.is_sold && isApproved && !isExpired) && [styles.borderLeft, { borderLeftColor: colors.border }]]} onPress={() => router.push(`/edit-post?id=${item.id}` as any)}>
             <Text style={[styles.actionBtnText, { color: '#007AFF' }]}>{isRejected ? 'Fix Ad' : 'Edit'}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.actionBtn, styles.borderLeft, { borderLeftColor: colors.border }]} onPress={() => deleteAd(item.id)}>
@@ -278,12 +292,13 @@ const insets = useSafeAreaInsets();
         <View style={{ width: 28 }} />
       </View>
 
+      {/* ✨ REWRITTEN TABS: Active | Pending | Inactive */}
       <View style={[styles.tabContainer, { backgroundColor: colors.backgroundSecondary }]}>
         <TouchableOpacity style={[styles.tab, activeTab === 'Active' && [styles.tabActive, { backgroundColor: colors.card }]]} onPress={() => setActiveTab('Active')}>
           <Text style={[styles.tabText, { color: colors.textSecondary }, activeTab === 'Active' && [styles.tabTextActive, { color: colors.text }]]}>Active ({activeAds.length})</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.tab, activeTab === 'Sold' && [styles.tabActive, { backgroundColor: colors.card }]]} onPress={() => setActiveTab('Sold')}>
-          <Text style={[styles.tabText, { color: colors.textSecondary }, activeTab === 'Sold' && [styles.tabTextActive, { color: colors.text }]]}>Sold ({soldAds.length})</Text>
+        <TouchableOpacity style={[styles.tab, activeTab === 'Pending' && [styles.tabActive, { backgroundColor: colors.card }]]} onPress={() => setActiveTab('Pending')}>
+          <Text style={[styles.tabText, { color: colors.textSecondary }, activeTab === 'Pending' && [styles.tabTextActive, { color: colors.text }]]}>Pending ({pendingAds.length})</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.tab, activeTab === 'Inactive' && [styles.tabActive, { backgroundColor: colors.card }]]} onPress={() => setActiveTab('Inactive')}>
           <Text style={[styles.tabText, { color: colors.textSecondary }, activeTab === 'Inactive' && [styles.tabTextActive, { color: colors.text }]]}>Inactive ({inactiveAds.length})</Text>

@@ -39,9 +39,8 @@ const getInitials = (name?: string) => {
 export default function EditProfile() {
   const router = useRouter();
   const { lang, setLang, t } = useLanguage();
- const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
+  const { colors, isDark, toggleTheme } = useTheme();
 
- // ✨ ADD THIS LINE
   const insets = useSafeAreaInsets();
   
   const [displayName, setDisplayName] = useState('');
@@ -120,7 +119,6 @@ export default function EditProfile() {
 
     const cleanUsername = username.trim().toLowerCase().replace(/[^a-z0-9_.]/g, '');
     
-    // ✨ Syncing real_name and display_name into one seamless identity
     let updates: any = { display_name: realName, real_name: realName };
 
     if (cleanUsername !== initialUsername) {
@@ -203,7 +201,7 @@ export default function EditProfile() {
     );
   }
 
-return (
+  return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border, paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={() => router.push('/home?openProfile=true' as any)}>
@@ -242,6 +240,40 @@ return (
                 </Text>
               </TouchableOpacity>
             ))}
+          </View>
+
+          {/* ✨ NEW THEME SWITCHER ✨ */}
+          <Text style={[styles.label, { color: colors.text, marginTop: 24 }]}>App Theme</Text>
+          <View style={styles.languageContainer}>
+            <TouchableOpacity
+              style={[
+                styles.languageChip,
+                { backgroundColor: colors.card, borderColor: colors.border },
+                !isDark && { backgroundColor: colors.tint, borderColor: colors.tint }
+              ]}
+              onPress={() => isDark && toggleTheme()}
+            >
+              <Text style={[
+                styles.languageText,
+                { color: colors.text },
+                !isDark && { color: '#fff', fontWeight: 'bold' }
+              ]}>Light</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.languageChip,
+                { backgroundColor: colors.card, borderColor: colors.border },
+                isDark && { backgroundColor: colors.tint, borderColor: colors.tint }
+              ]}
+              onPress={() => !isDark && toggleTheme()}
+            >
+              <Text style={[
+                styles.languageText,
+                { color: colors.text },
+                isDark && { color: '#000', fontWeight: 'bold' }
+              ]}>Dark</Text>
+            </TouchableOpacity>
           </View>
         </View>
 

@@ -380,8 +380,13 @@ export default function LoginScreen() {
     if (event && event.nativeEvent.data) {
       const data = event.nativeEvent.data;
       
+      // ✨ CRITICAL FIX: Ignore the native 'open' lifecycle message
+      if (data === 'open') {
+        return; 
+      }
+      
       if (typeof data === 'string' && data.length < 100) {
-        if (['cancel', 'close', 'error', 'expired'].includes(data.toLowerCase())) {
+        if (['cancel', 'close', 'error', 'expired', 'challenge-closed'].includes(data.toLowerCase())) {
           captchaRef.current?.hide(); 
           setPendingAuthAction(null);
           if (['error', 'expired'].includes(data.toLowerCase())) {
@@ -391,6 +396,7 @@ export default function LoginScreen() {
         }
       }
       
+      // If it passes the checks above, 'data' is the actual secure token!
       captchaRef.current?.hide();
       setLoading(true);
       const trimmedEmail = email.trim().toLowerCase();
@@ -412,7 +418,7 @@ export default function LoginScreen() {
             password,
             options: { 
               captchaToken: data,
-              data: { full_name: fullName.trim() } // ✨ 3. ADD THIS LINE TO SAVE TO DATABASE
+              data: { full_name: fullName.trim() } 
             }
           });
           if (error) throw error;
@@ -552,11 +558,15 @@ export default function LoginScreen() {
                   maxLength={28}
                   autoCapitalize="words"
                 />
-                <Text style={{ fontSize: 12, color: colors.textSecondary, textAlign: 'right', paddingRight: 4 }}>
-                  {fullName.length}/28
-                </Text>
+                {/* ✨ Updated logic: Only shows when 28 characters are reached */}
+                {fullName.length >= 28 && (
+                  <Text style={{ fontSize: 12, color: '#FF3B30', textAlign: 'right', paddingRight: 4, fontWeight: 'bold' }}>
+                    Limit Reached
+                  </Text>
+                )}
               </View>
             )}
+
 
             {/* EXISTING EMAIL INPUT */}
             <TextInput
@@ -787,16 +797,18 @@ export default function LoginScreen() {
         </View>
       </Modal>
 
+      {/* ✨ MOVED THIS INSIDE THE VIEW ✨ */}
       {Platform.OS !== 'web' && (
         <ConfirmHcaptcha
           ref={captchaRef}
           siteKey={process.env.EXPO_PUBLIC_HCAPTCHA_SITE_KEY || ''}
-          baseUrl="https://boltzy.in/"
+          baseUrl="https://boltzy.in"
           languageCode="en"
-          size="invisible" 
+          size="normal"       
           onMessage={onCaptchaMessage}
         />
       )}
+
     </KeyboardAvoidingView>
   );
 }
@@ -804,7 +816,7 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   inner: { flex: 1, justifyContent: 'center', padding: 24, maxWidth: 500, alignSelf: 'center', width: '100%' },
-  logo: { fontSize: 48, fontWeight: 'bold', marginBottom: 8, letterSpacing: -1 },
+  logo: { fontSize: 40, fontWeight: 'bold', marginBottom: 8, letterSpacing: -1, marginTop: 10 },
   subtitle: { fontSize: 16, marginBottom: 32, lineHeight: 24 },
   form: { width: '100%' },
   
