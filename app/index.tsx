@@ -30,21 +30,19 @@ type AuthMode = 'otp' | 'login' | 'signup' | 'forgot';
 
 export default function LoginScreen() {
   const router = useRouter();
- const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
-
- // ✨ ADD THIS LINE
+  const { colors, isDark, toggleTheme } = useTheme();
   const insets = useSafeAreaInsets();
   
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState(''); // ✨ 1. ADD THIS LINE
+  const [fullName, setFullName] = useState('');
   const [otp, setOtp] = useState('');
   const [step, setStep] = useState(1);
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [showPassword, setShowPassword] = useState(false); 
   const [loading, setLoading] = useState(false);
   const [showWebLanding, setShowWebLanding] = useState(Platform.OS === 'web');
-  const [pendingAuthAction, setPendingAuthAction] = useState<'otp' | 'signup' | null>(null); 
+  const [pendingAuthAction, setPendingAuthAction] = useState<'otp' | 'signup' | 'login' | 'forgot' | null>(null);
   
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [legalModalType, setLegalModalType] = useState<'terms' | 'privacy' | null>(null);
@@ -305,19 +303,8 @@ export default function LoginScreen() {
       return;
     }
 
-    setLoading(true);
-    try {
-      const redirectUrl = Linking.createURL('/reset-password');
-      const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, { redirectTo: redirectUrl });
-      if (error) throw error;
-      
-      Toast.show({ type: 'success', text1: 'Reset Email Sent', text2: 'Check your inbox for password reset instructions.', position: 'top' });
-      setAuthMode('login');
-    } catch (e: any) {
-      Toast.show({ type: 'error', text1: 'Error', text2: e.message, position: 'top' });
-    } finally {
-      setLoading(false);
-    }
+    setPendingAuthAction('forgot');
+    captchaRef.current?.show();
   };
 
   const handlePasswordAuth = async () => {
@@ -334,7 +321,6 @@ export default function LoginScreen() {
     }
 
     if (authMode === 'signup') {
-      // ✨ 2. ADD THESE VALIDATION CHECKS
       if (!fullName.trim()) {
         Toast.show({ type: 'error', text1: 'Name Required', text2: 'Please enter your full name.', position: 'top' });
         return;
@@ -351,15 +337,8 @@ export default function LoginScreen() {
       setPendingAuthAction('signup');
       captchaRef.current?.show();
     } else {
-      setLoading(true);
-      try {
-        const { error } = await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
-        if (error) throw error;
-      } catch (e: any) {
-        Toast.show({ type: 'error', text1: 'Login Failed', text2: e.message, position: 'top' });
-      } finally {
-        setLoading(false);
-      }
+      setPendingAuthAction('login');
+      captchaRef.current?.show();
     }
   };
 
@@ -380,7 +359,6 @@ export default function LoginScreen() {
     if (event && event.nativeEvent.data) {
       const data = event.nativeEvent.data;
       
-      // ✨ CRITICAL FIX: Ignore the native 'open' lifecycle message
       if (data === 'open') {
         return; 
       }
@@ -396,7 +374,6 @@ export default function LoginScreen() {
         }
       }
       
-      // If it passes the checks above, 'data' is the actual secure token!
       captchaRef.current?.hide();
       setLoading(true);
       const trimmedEmail = email.trim().toLowerCase();
@@ -423,6 +400,25 @@ export default function LoginScreen() {
           });
           if (error) throw error;
           Toast.show({ type: 'success', text1: 'Account Created!', text2: 'Please check your email.', position: 'top' });
+          setAuthMode('login');
+        }
+        else if (pendingAuthAction === 'login') {
+          const { error } = await supabase.auth.signInWithPassword({
+            email: trimmedEmail,
+            password,
+            options: { captchaToken: data } 
+          });
+          if (error) throw error;
+        }
+        else if (pendingAuthAction === 'forgot') {
+          const redirectUrl = Linking.createURL('/reset-password');
+          const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, { 
+            redirectTo: redirectUrl,
+            captchaToken: data
+          });
+          if (error) throw error;
+          
+          Toast.show({ type: 'success', text1: 'Reset Email Sent', text2: 'Check your inbox for password reset instructions.', position: 'top' });
           setAuthMode('login');
         }
       } catch (e: any) {
@@ -512,234 +508,230 @@ export default function LoginScreen() {
   };
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={[styles.inner, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-        
-        {step !== 3 && <Text style={[styles.logo, { color: colors.text }]}>Boltzy</Text>}
-        
-        <Text style={[styles.subtitle, { color: colors.textSecondary }, step === 3 && { fontSize: 24, fontWeight: 'bold', color: colors.text, marginBottom: 8 }]}>
-          {getSubtitle()}
-        </Text>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <KeyboardAvoidingView 
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView 
+          contentContainerStyle={[styles.inner, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {step !== 3 && <Text style={[styles.logo, { color: colors.text }]}>Boltzy</Text>}
+          
+          <Text style={[styles.subtitle, { color: colors.textSecondary }, step === 3 && { fontSize: 24, fontWeight: 'bold', color: colors.text, marginBottom: 8 }]}>
+            {getSubtitle()}
+          </Text>
 
-        {step === 3 && (
-           <Text style={{ fontSize: 16, color: colors.textSecondary, marginBottom: 24 }}>
-             Pick up to 4 categories to personalize your feed.
-           </Text>
-        )}
+          {step === 3 && (
+             <Text style={{ fontSize: 16, color: colors.textSecondary, marginBottom: 24 }}>
+               Pick up to 4 categories to personalize your feed.
+             </Text>
+          )}
 
-        {/* ═══ STEP 1: MAIN AUTHENTICATION HUB ═══ */}
-        {step === 1 && (
-          <View style={styles.form}>
-            
-            {(authMode === 'otp' || authMode === 'login' || authMode === 'signup') && (
-              <>
-                <TouchableOpacity style={[styles.googleButton, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={handleGoogleLogin} disabled={loading}>
-                  <Ionicons name="logo-google" size={24} color={colors.text} style={{ marginRight: 12 }} />
-                  <Text style={[styles.googleButtonText, { color: colors.text }]}>Continue with Google</Text>
-                </TouchableOpacity>
-
-                <View style={styles.dividerRow}>
-                  <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
-                  <Text style={[styles.dividerText, { color: colors.textSecondary }]}>or continue with email</Text>
-                  <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
-                </View>
-              </>
-            )}
-
-            {/* ✨ 4. ADD THIS NEW FULL NAME BLOCK HERE */}
-            {authMode === 'signup' && (
-              <View style={{ marginBottom: 16 }}>
-                <TextInput
-                  style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text, marginBottom: 4 }]}
-                  placeholder="Full Name (e.g. Rahul Sharma)"
-                  placeholderTextColor={colors.textSecondary}
-                  value={fullName}
-                  onChangeText={setFullName}
-                  maxLength={28}
-                  autoCapitalize="words"
-                />
-                {/* ✨ Updated logic: Only shows when 28 characters are reached */}
-                {fullName.length >= 28 && (
-                  <Text style={{ fontSize: 12, color: '#FF3B30', textAlign: 'right', paddingRight: 4, fontWeight: 'bold' }}>
-                    Limit Reached
-                  </Text>
-                )}
-              </View>
-            )}
-
-
-            {/* EXISTING EMAIL INPUT */}
-            <TextInput
-              style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]}
-              placeholder="name@example.com"
-              placeholderTextColor={colors.textSecondary}
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-
-
-            {(authMode === 'login' || authMode === 'signup') && (
-              <View style={[styles.passwordContainer, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
-                <TextInput
-                  style={[styles.passwordInput, { color: colors.text }]}
-                  placeholder="Password"
-                  placeholderTextColor={colors.textSecondary}
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry={!showPassword}
-                  autoCapitalize="none"
-                />
-                <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
-                  <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={22} color={colors.textSecondary} />
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {authMode === 'signup' && (
-              <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 16, paddingHorizontal: 4 }}>
-                Password must contain 8+ characters, including an uppercase letter, lowercase letter, number, and special character.
-              </Text>
-            )}
-
-            {authMode !== 'forgot' && (
-              <View style={styles.checkboxRow}>
-                <TouchableOpacity 
-                  style={[styles.checkbox, { borderColor: colors.textSecondary, backgroundColor: colors.card }, acceptedTerms && [styles.checkboxChecked, { backgroundColor: colors.tint, borderColor: colors.tint }]]} 
-                  onPress={() => setAcceptedTerms(!acceptedTerms)}
-                  activeOpacity={0.8}
-                >
-                  {acceptedTerms && <Ionicons name="checkmark" size={16} color={isDark ? '#000' : '#fff'} />}
-                </TouchableOpacity>
-                <Text style={[styles.checkboxLabel, { color: colors.textSecondary }]}>
-                  I agree to Boltzy's{' '}
-                  <Text style={styles.legalLink} onPress={() => setLegalModalType('terms')}>Terms of Service</Text>
-                  {' '}and{' '}
-                  <Text style={styles.legalLink} onPress={() => setLegalModalType('privacy')}>Privacy Policy</Text>.
-                </Text>
-              </View>
-            )}
-
-            {/* Dynamic Action Button */}
-            {authMode === 'otp' && (
-              <TouchableOpacity style={[styles.button, { backgroundColor: colors.tint }]} onPress={requestOtp} disabled={loading}>
-                {loading ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.buttonText, { color: isDark ? '#000' : '#fff' }]}>Send Code</Text>}
-              </TouchableOpacity>
-            )}
-
-            {(authMode === 'login' || authMode === 'signup') && (
-              <TouchableOpacity style={[styles.button, { backgroundColor: colors.tint }]} onPress={handlePasswordAuth} disabled={loading}>
-                {loading ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.buttonText, { color: isDark ? '#000' : '#fff' }]}>{authMode === 'login' ? 'Sign In' : 'Sign Up'}</Text>}
-              </TouchableOpacity>
-            )}
-
-            {authMode === 'forgot' && (
-              <TouchableOpacity style={[styles.button, { backgroundColor: colors.tint }]} onPress={handlePasswordReset} disabled={loading}>
-                {loading ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.buttonText, { color: isDark ? '#000' : '#fff' }]}>Send Reset Link</Text>}
-              </TouchableOpacity>
-            )}
-
-            {/* Dynamic Text Links */}
-            <View style={styles.linkRow}>
-              {authMode === 'otp' && (
-                <TouchableOpacity onPress={() => setAuthMode('login')}>
-                  <Text style={[styles.linkText, { color: colors.textSecondary }]}>Sign in with Password instead</Text>
-                </TouchableOpacity>
-              )}
-
-              {authMode === 'login' && (
+          {step === 1 && (
+            <View style={styles.form}>
+              
+              {(authMode === 'otp' || authMode === 'login' || authMode === 'signup') && (
                 <>
-                  <TouchableOpacity onPress={() => setAuthMode('forgot')}>
-                    <Text style={[styles.linkText, { color: colors.textSecondary }]}>Forgot Password?</Text>
+                  <TouchableOpacity style={[styles.googleButton, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={handleGoogleLogin} disabled={loading}>
+                    <Ionicons name="logo-google" size={24} color={colors.text} style={{ marginRight: 12 }} />
+                    <Text style={[styles.googleButtonText, { color: colors.text }]}>Continue with Google</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setAuthMode('signup')} style={{ marginTop: 16 }}>
-                    <Text style={[styles.linkText, { color: colors.textSecondary }]}>New user? <Text style={{ color: colors.text, fontWeight: 'bold' }}>Sign Up</Text></Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setAuthMode('otp')} style={{ marginTop: 16 }}>
-                    <Text style={[styles.linkText, { color: colors.textSecondary }]}>Use a Login Code instead</Text>
-                  </TouchableOpacity>
+
+                  <View style={styles.dividerRow}>
+                    <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
+                    <Text style={[styles.dividerText, { color: colors.textSecondary }]}>or continue with email</Text>
+                    <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
+                  </View>
                 </>
               )}
 
               {authMode === 'signup' && (
-                <TouchableOpacity onPress={() => setAuthMode('login')}>
-                  <Text style={[styles.linkText, { color: colors.textSecondary }]}>Already have an account? <Text style={{ color: colors.text, fontWeight: 'bold' }}>Sign In</Text></Text>
+                <View style={{ marginBottom: 16 }}>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text, marginBottom: 4 }]}
+                    placeholder="Full Name"
+                    placeholderTextColor={colors.textSecondary}
+                    value={fullName}
+                    onChangeText={setFullName}
+                    maxLength={28}
+                    autoCapitalize="words"
+                  />
+                  {fullName.length >= 28 && (
+                    <Text style={{ fontSize: 12, color: '#FF3B30', textAlign: 'right', paddingRight: 4, fontWeight: 'bold' }}>
+                      Limit Reached
+                    </Text>
+                  )}
+                </View>
+              )}
+
+              <TextInput
+                style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]}
+                placeholder="name@example.com"
+                placeholderTextColor={colors.textSecondary}
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+
+              {(authMode === 'login' || authMode === 'signup') && (
+                <View style={[styles.passwordContainer, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
+                  <TextInput
+                    style={[styles.passwordInput, { color: colors.text }]}
+                    placeholder="Password"
+                    placeholderTextColor={colors.textSecondary}
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                  />
+                  <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
+                    <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={22} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {authMode === 'signup' && (
+                <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 16, paddingHorizontal: 4 }}>
+                  Password must contain 8+ characters, including an uppercase letter, lowercase letter, number, and special character.
+                </Text>
+              )}
+
+              {authMode !== 'forgot' && (
+                <View style={styles.checkboxRow}>
+                  <TouchableOpacity 
+                    style={[styles.checkbox, { borderColor: colors.textSecondary, backgroundColor: colors.card }, acceptedTerms && [styles.checkboxChecked, { backgroundColor: colors.tint, borderColor: colors.tint }]]} 
+                    onPress={() => setAcceptedTerms(!acceptedTerms)}
+                    activeOpacity={0.8}
+                  >
+                    {acceptedTerms && <Ionicons name="checkmark" size={16} color={isDark ? '#000' : '#fff'} />}
+                  </TouchableOpacity>
+                  <Text style={[styles.checkboxLabel, { color: colors.textSecondary }]}>
+                    I agree to Boltzy's{' '}
+                    <Text style={styles.legalLink} onPress={() => setLegalModalType('terms')}>Terms of Service</Text>
+                    {' '}and{' '}
+                    <Text style={styles.legalLink} onPress={() => setLegalModalType('privacy')}>Privacy Policy</Text>.
+                  </Text>
+                </View>
+              )}
+
+              {authMode === 'otp' && (
+                <TouchableOpacity style={[styles.button, { backgroundColor: colors.tint }]} onPress={requestOtp} disabled={loading}>
+                  {loading ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.buttonText, { color: isDark ? '#000' : '#fff' }]}>Send Code</Text>}
+                </TouchableOpacity>
+              )}
+
+              {(authMode === 'login' || authMode === 'signup') && (
+                <TouchableOpacity style={[styles.button, { backgroundColor: colors.tint }]} onPress={handlePasswordAuth} disabled={loading}>
+                  {loading ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.buttonText, { color: isDark ? '#000' : '#fff' }]}>{authMode === 'login' ? 'Sign In' : 'Sign Up'}</Text>}
                 </TouchableOpacity>
               )}
 
               {authMode === 'forgot' && (
-                <TouchableOpacity onPress={() => setAuthMode('login')}>
-                  <Text style={[styles.linkText, { color: colors.textSecondary }]}>Back to Sign In</Text>
+                <TouchableOpacity style={[styles.button, { backgroundColor: colors.tint }]} onPress={handlePasswordReset} disabled={loading}>
+                  {loading ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.buttonText, { color: isDark ? '#000' : '#fff' }]}>Send Reset Link</Text>}
                 </TouchableOpacity>
               )}
-            </View>
-          </View>
-        )}
 
-        {/* ═══ STEP 2: OTP VERIFICATION ═══ */}
-        {step === 2 && (
-          <View style={styles.form}>
-            <TextInput
-              style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]}
-              placeholder="123456"
-              placeholderTextColor={colors.textSecondary}
-              value={otp}
-              onChangeText={setOtp}
-              keyboardType="number-pad"
-              maxLength={6}
-              autoFocus
-            />
-            <TouchableOpacity style={[styles.button, { backgroundColor: colors.tint }]} onPress={verifyOtp} disabled={loading}>
-              {loading ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.buttonText, { color: isDark ? '#000' : '#fff' }]}>Verify & Login</Text>}
-            </TouchableOpacity>
-            
-            <TouchableOpacity onPress={() => { setStep(1); setOtp(''); }} style={styles.backButton}>
-              <Text style={[styles.linkText, { color: colors.textSecondary }]}>Use a different email</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* ═══ STEP 3: ONBOARDING INTERESTS ═══ */}
-        {step === 3 && (
-          <View style={styles.form}>
-            <View style={styles.interestsGrid}>
-              {ALL_CATEGORIES.map((cat) => {
-                const isSelected = selectedInterests.includes(cat);
-                return (
-                  <TouchableOpacity
-                    key={cat}
-                    style={[styles.interestChip, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }, isSelected && { backgroundColor: colors.tint, borderColor: colors.tint }]}
-                    onPress={() => toggleInterest(cat)}
-                  >
-                    <Text style={[styles.interestChipText, { color: colors.textSecondary }, isSelected && { color: isDark ? '#000' : '#fff' }]}>
-                      {cat}
-                    </Text>
-                    {isSelected && <Ionicons name="checkmark-circle" size={16} color={isDark ? '#000' : '#fff'} style={{ marginLeft: 6 }} />}
+              <View style={styles.linkRow}>
+                {authMode === 'otp' && (
+                  <TouchableOpacity onPress={() => setAuthMode('login')}>
+                    <Text style={[styles.linkText, { color: colors.textSecondary }]}>Sign in with Password instead</Text>
                   </TouchableOpacity>
-                );
-              })}
+                )}
+
+                {authMode === 'login' && (
+                  <>
+                    <TouchableOpacity onPress={() => setAuthMode('forgot')}>
+                      <Text style={[styles.linkText, { color: colors.textSecondary }]}>Forgot Password?</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setAuthMode('signup')} style={{ marginTop: 16 }}>
+                      <Text style={[styles.linkText, { color: colors.textSecondary }]}>New user? <Text style={{ color: colors.text, fontWeight: 'bold' }}>Sign Up</Text></Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setAuthMode('otp')} style={{ marginTop: 16 }}>
+                      <Text style={[styles.linkText, { color: colors.textSecondary }]}>Use a Login Code instead</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+
+                {authMode === 'signup' && (
+                  <TouchableOpacity onPress={() => setAuthMode('login')}>
+                    <Text style={[styles.linkText, { color: colors.textSecondary }]}>Already have an account? <Text style={{ color: colors.text, fontWeight: 'bold' }}>Sign In</Text></Text>
+                  </TouchableOpacity>
+                )}
+
+                {authMode === 'forgot' && (
+                  <TouchableOpacity onPress={() => setAuthMode('login')}>
+                    <Text style={[styles.linkText, { color: colors.textSecondary }]}>Back to Sign In</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
-            
-            <View style={{ marginTop: 24, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ fontSize: 14, color: colors.textSecondary, fontWeight: '600' }}>
-                {selectedInterests.length}/4 Selected
-              </Text>
-              <TouchableOpacity 
-                style={[styles.finishButton, selectedInterests.length === 0 && { opacity: 0.5 }]} 
-                onPress={saveInterestsAndFinish} 
-                disabled={loading || selectedInterests.length === 0}
-              >
-                {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.finishButtonText}>Continue</Text>}
+          )}
+
+          {step === 2 && (
+            <View style={styles.form}>
+              <TextInput
+                style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]}
+                placeholder="123456"
+                placeholderTextColor={colors.textSecondary}
+                value={otp}
+                onChangeText={setOtp}
+                keyboardType="number-pad"
+                maxLength={6}
+                autoFocus
+              />
+              <TouchableOpacity style={[styles.button, { backgroundColor: colors.tint }]} onPress={verifyOtp} disabled={loading}>
+                {loading ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.buttonText, { color: isDark ? '#000' : '#fff' }]}>Verify & Login</Text>}
+              </TouchableOpacity>
+              
+              <TouchableOpacity onPress={() => { setStep(1); setOtp(''); }} style={styles.backButton}>
+                <Text style={[styles.linkText, { color: colors.textSecondary }]}>Use a different email</Text>
               </TouchableOpacity>
             </View>
-          </View>
-        )}
+          )}
 
-      </View>
+          {step === 3 && (
+            <View style={styles.form}>
+              <View style={styles.interestsGrid}>
+                {ALL_CATEGORIES.map((cat) => {
+                  const isSelected = selectedInterests.includes(cat);
+                  return (
+                    <TouchableOpacity
+                      key={cat}
+                      style={[styles.interestChip, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }, isSelected && { backgroundColor: colors.tint, borderColor: colors.tint }]}
+                      onPress={() => toggleInterest(cat)}
+                    >
+                      <Text style={[styles.interestChipText, { color: colors.textSecondary }, isSelected && { color: isDark ? '#000' : '#fff' }]}>
+                        {cat}
+                      </Text>
+                      {isSelected && <Ionicons name="checkmark-circle" size={16} color={isDark ? '#000' : '#fff'} style={{ marginLeft: 6 }} />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              
+              <View style={{ marginTop: 24, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={{ fontSize: 14, color: colors.textSecondary, fontWeight: '600' }}>
+                  {selectedInterests.length}/4 Selected
+                </Text>
+                <TouchableOpacity 
+                  style={[styles.finishButton, selectedInterests.length === 0 && { opacity: 0.5 }]} 
+                  onPress={saveInterestsAndFinish} 
+                  disabled={loading || selectedInterests.length === 0}
+                >
+                  {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.finishButtonText}>Continue</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </ScrollView>
+      </KeyboardAvoidingView>
 
-      {/* ═══ LEGAL DOCUMENT VIEWER MODAL ═══ */}
       <Modal visible={legalModalType !== null} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
@@ -797,41 +789,49 @@ export default function LoginScreen() {
         </View>
       </Modal>
 
-      {/* ✨ MOVED THIS INSIDE THE VIEW ✨ */}
       {Platform.OS !== 'web' && (
         <ConfirmHcaptcha
           ref={captchaRef}
           siteKey={process.env.EXPO_PUBLIC_HCAPTCHA_SITE_KEY || ''}
           baseUrl="https://boltzy.in"
           languageCode="en"
-          size="normal"       
+          size="invisible"       
           onMessage={onCaptchaMessage}
         />
       )}
 
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  inner: { flex: 1, justifyContent: 'center', padding: 24, maxWidth: 500, alignSelf: 'center', width: '100%' },
+  inner: { flexGrow: 1, justifyContent: 'center', padding: 24, maxWidth: 500, alignSelf: 'center', width: '100%' },
   logo: { fontSize: 40, fontWeight: 'bold', marginBottom: 8, letterSpacing: -1, marginTop: 10 },
   subtitle: { fontSize: 16, marginBottom: 32, lineHeight: 24 },
   form: { width: '100%' },
   
   googleButton: {
-    flexDirection: 'row',
-    height: 60,
-    borderWidth: 1.5,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 24,
-    ...Platform.select({
-      web: { boxShadow: '0px 2px 8px rgba(0,0,0,0.05)' },
-      default: { elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4 }
-    })
+    flexDirection: 'row', height: 60, borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginBottom: 24,
+    borderWidth: 0, // Removed border
+    ...Platform.select({ web: { boxShadow: '4px 4px 10px rgba(0,0,0,0.1)' }, default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8 }})
+  },
+  input: { 
+    height: 60, borderRadius: 16, paddingHorizontal: 20, fontSize: 18, marginBottom: 16, 
+    borderWidth: 0, // Faux-inset
+  },
+  passwordContainer: {
+    flexDirection: 'row', alignItems: 'center', height: 60, borderRadius: 16, marginBottom: 16, 
+    borderWidth: 0, // Faux-inset
+  },
+  button: { 
+    height: 60, borderRadius: 16, justifyContent: 'center', alignItems: 'center',
+    ...Platform.select({ web: { boxShadow: '4px 4px 12px rgba(0,0,0,0.15)' }, default: { elevation: 6, shadowColor: '#000', shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.15, shadowRadius: 10 }})
+  },
+  interestChip: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 20, 
+    borderWidth: 0, // Removed border
+    ...Platform.select({ web: { boxShadow: '2px 2px 6px rgba(0,0,0,0.1)' }, default: { elevation: 3, shadowColor: '#000', shadowOffset: { width: 2, height: 2 }, shadowOpacity: 0.1, shadowRadius: 5 }})
   },
   googleButtonText: { fontSize: 18, fontWeight: '600' },
   
@@ -839,23 +839,6 @@ const styles = StyleSheet.create({
   dividerLine: { flex: 1, height: 1 },
   dividerText: { marginHorizontal: 12, fontSize: 14, fontWeight: '500' },
 
-  input: { 
-    height: 60, 
-    borderWidth: 1.5, 
-    borderRadius: 16, 
-    paddingHorizontal: 20, 
-    fontSize: 18, 
-    marginBottom: 16, 
-  },
-
-  passwordContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 60,
-    borderWidth: 1.5,
-    borderRadius: 16,
-    marginBottom: 16,
-  },
   passwordInput: {
     flex: 1,
     height: '100%',
@@ -896,16 +879,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
 
-  button: { 
-    height: 60, 
-    borderRadius: 16, 
-    justifyContent: 'center', 
-    alignItems: 'center',
-    ...Platform.select({
-      web: { boxShadow: '0px 4px 12px rgba(0,0,0,0.1)' },
-      default: { elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8 }
-    })
-  },
+  
   buttonText: { fontSize: 18, fontWeight: 'bold' },
   
   linkRow: { marginTop: 20, alignItems: 'center', paddingVertical: 10 },
@@ -916,14 +890,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 12,
-  },
-  interestChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 20,
-    borderWidth: 1.5,
   },
   interestChipText: {
     fontSize: 15,

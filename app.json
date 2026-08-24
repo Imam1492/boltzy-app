@@ -10,10 +10,12 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Boltzy needs access to your camera so you can take photos of items you want to sell.",
-        "NSPhotoLibraryUsageDescription": "Boltzy needs access to your photo library to upload images for your listings.",
-        "NSLocationWhenInUseUsageDescription": "Boltzy uses your location to show you items for sale nearby.",
-        "NSContactsUsageDescription": "Boltzy requires contacts access so you can easily share contact info in chats."
+        "NSCameraUsageDescription": "Boltzy uses your camera to let you snap and upload photos of items you want to sell directly in the app.",
+        "NSPhotoLibraryUsageDescription": "Boltzy accesses your photo library so you can select and upload existing images for your marketplace listings.",
+        "NSLocationWhenInUseUsageDescription": "Boltzy uses your location to automatically filter the feed and show you items for sale right in your neighborhood.",
+        "NSContactsUsageDescription": "Boltzy requires access to your contacts so you can quickly and securely share phone numbers within buyer/seller chats.",
+        "NSMicrophoneUsageDescription": "Boltzy needs microphone access to allow you to search the marketplace hands-free using your voice.",
+        "NSSpeechRecognitionUsageDescription": "Boltzy uses speech recognition to convert your spoken words into text for the search bar."
       }
     },
     "android": {
@@ -24,6 +26,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.imam_khan.boltzyapp",
+      "googleServicesFile": "./google-services.json", 
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
@@ -42,13 +45,12 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-light.png",
-          "imageWidth": 200,
+          "image": "./assets/images/icon.png", 
           "resizeMode": "contain",
-          "backgroundColor": "#FFFFFF",
+          "backgroundColor": "#ffffff",
           "dark": {
-            "image": "./assets/images/splash-dark.png",
-            "backgroundColor": "#0F172A"
+            "image": "./assets/images/1082foregroundnewactual.png", 
+            "backgroundColor": "#050014"
           }
         }
       ],
@@ -58,7 +60,8 @@
       "expo-image",
       "expo-status-bar",
       "expo-secure-store",
-      "expo-speech-recognition"
+      "expo-speech-recognition",
+      "expo-notifications" 
     ],
     "experiments": {
       "typedRoutes": true,

@@ -288,7 +288,6 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1 },
   headerTitle: { fontSize: 20, fontWeight: 'bold' },
   scrollContent: { padding: 20, paddingBottom: 60 },
-  usageBanner: { padding: 16, borderRadius: 16, marginBottom: 24, borderWidth: 1 },
   usageTitle: { fontSize: 16, fontWeight: 'bold' },
   progressBarBg: { height: 8, borderRadius: 4, overflow: 'hidden', marginBottom: 12 },
   progressBarFill: { height: '100%' },
@@ -300,7 +299,16 @@ const styles = StyleSheet.create({
   urgencyTitle: { fontSize: 16, fontWeight: 'bold' },
   urgencyText: { fontSize: 13, marginTop: 4, lineHeight: 18 },
   sectionTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
-  planCard: { borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, ...Platform.select({ web: { boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }, default: { elevation: 2 } }) },
+  planCard: { 
+    borderRadius: 16, padding: 20, marginBottom: 16, 
+    borderWidth: 0, 
+    ...Platform.select({ web: { boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }, default: { elevation: 5, shadowColor: '#000', shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8 }}) 
+  },
+  usageBanner: { 
+    padding: 16, borderRadius: 16, marginBottom: 24, 
+    borderWidth: 0,
+    ...Platform.select({ default: { elevation: 3, shadowColor: '#000', shadowOffset: { width: 2, height: 2 }, shadowOpacity: 0.08, shadowRadius: 5 }}) 
+  },
   planCardActive: { borderWidth: 2 },
   popularBadge: { position: 'absolute', top: -12, right: 20, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
   popularText: { fontSize: 10, fontWeight: 'bold', letterSpacing: 1 },

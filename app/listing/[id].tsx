@@ -4,6 +4,7 @@ import Head from 'expo-router/head';
 import { useEffect, useRef, useState } from 'react';
 import { Skeleton } from '../../components/ShimmerSkeleton';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import NeumorphicCard from '../../components/NeumorphicCard'; // ✨ Imported our custom Soft UI Card!
 import {
   Alert,
   Animated,
@@ -40,7 +41,7 @@ export default function ListingDetails() {
   const insets = useSafeAreaInsets();
 
   const { lang, t, translateUGC } = useLanguage();
- const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
+  const { colors, isDark } = useTheme();
 
   const [listing, setListing]             = useState<any>(null);
   const [seller, setSeller]               = useState<any>(null);
@@ -55,8 +56,6 @@ export default function ListingDetails() {
   const [reportStep, setReportStep]                 = useState<'form' | 'success'>('form');
 
   const flatRef = useRef<FlatList>(null);
-
-  
 
   useEffect(() => { fetchData(); }, [id]);
 
@@ -236,53 +235,13 @@ export default function ListingDetails() {
         <ScrollView showsVerticalScrollIndicator={false}>
           <View style={[s.carouselWrap, { backgroundColor: colors.backgroundSecondary }]}>
             <Skeleton width="100%" height={320} borderRadius={0} />
-            <View style={s.overlayHeader}>
-              <Skeleton width={38} height={38} borderRadius={19} />
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                <Skeleton width={38} height={38} borderRadius={19} />
-                <Skeleton width={38} height={38} borderRadius={19} />
-              </View>
-            </View>
           </View>
           <View style={s.details}>
             <Skeleton width={160} height={36} style={{ marginBottom: 12 }} />
             <Skeleton width="90%" height={22} style={{ marginBottom: 8 }} />
             <Skeleton width="60%" height={22} style={{ marginBottom: 16 }} />
-            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
-              <Skeleton width={80} height={28} borderRadius={14} />
-              <Skeleton width={90} height={28} borderRadius={14} />
-              <Skeleton width={100} height={28} borderRadius={14} />
-            </View>
-            <Skeleton width={180} height={16} style={{ marginBottom: 20 }} />
-            <View style={[s.divider, { backgroundColor: colors.border }]} />
-            <Skeleton width={140} height={20} style={{ marginBottom: 12 }} />
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
-              <Skeleton width={110} height={32} borderRadius={16} />
-              <Skeleton width={130} height={32} borderRadius={16} />
-              <Skeleton width={90} height={32} borderRadius={16} />
-            </View>
-            <View style={[s.divider, { backgroundColor: colors.border }]} />
-            <Skeleton width={160} height={20} style={{ marginBottom: 12 }} />
-            <Skeleton width="100%" height={14} style={{ marginBottom: 6 }} />
-            <Skeleton width="95%" height={14} style={{ marginBottom: 6 }} />
-            <Skeleton width="80%" height={14} style={{ marginBottom: 20 }} />
-            <View style={[s.divider, { backgroundColor: colors.border }]} />
-            <Skeleton width={150} height={20} style={{ marginBottom: 12 }} />
-            <View style={[s.sellerCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Skeleton width={58} height={58} borderRadius={29} />
-              <View style={{ flex: 1, gap: 6 }}>
-                <Skeleton width={120} height={16} />
-                <Skeleton width={100} height={12} />
-                <Skeleton width={80} height={12} />
-              </View>
-            </View>
           </View>
         </ScrollView>
-        <View style={[s.bottomBar, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
-          <Skeleton width={50} height={50} borderRadius={14} />
-          <Skeleton height={50} borderRadius={14} style={{ flex: 1 }} />
-          <Skeleton height={50} borderRadius={14} style={{ flex: 1.4 }} />
-        </View>
       </View>
     );
   }
@@ -342,46 +301,66 @@ export default function ListingDetails() {
         <meta name="twitter:image" content={mainImage} />
       </Head>
 
-      <ScrollView showsVerticalScrollIndicator={false} bounces>
-        <View style={[s.carouselWrap, { backgroundColor: colors.backgroundSecondary }]}>
-          <View style={s.overlayHeader}>
-            <TouchableOpacity style={[s.overlayBtn, { backgroundColor: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.93)' }]} onPress={() => router.back()}>
-              <Ionicons name="arrow-back" size={22} color={isDark ? '#fff' : '#000'} />
+      <View style={[s.overlayHeader, { top: insets.top + 8 }]} pointerEvents="box-none">
+        <TouchableOpacity 
+          style={[s.overlayBtn, { backgroundColor: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.93)' }]} 
+          onPress={() => router.back()}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="arrow-back" size={22} color={isDark ? '#fff' : '#000'} />
+        </TouchableOpacity>
+        
+        <View style={{ flexDirection: 'row', gap: 10 }} pointerEvents="box-none">
+          <TouchableOpacity 
+            style={[s.overlayBtn, { backgroundColor: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.93)' }]} 
+            onPress={handleShare}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="share-social-outline" size={22} color={isDark ? '#fff' : '#000'} />
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[s.overlayBtn, { backgroundColor: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.93)' }]} 
+            onPress={toggleWishlist}
+            activeOpacity={0.7}
+          >
+            <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={22} color={isSaved ? '#FF3B30' : (isDark ? '#fff' : '#000')} />
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[s.overlayBtn, { backgroundColor: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.93)' }]} 
+            onPress={() => setMenuOpen(v => !v)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="ellipsis-vertical" size={22} color={isDark ? '#fff' : '#000'} />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {menuOpen && (
+        <View style={[s.dropdown, { backgroundColor: colors.card, shadowColor: isDark ? '#000' : '#888', top: insets.top + 54 }]}>
+          {isOwner && (
+            <TouchableOpacity style={[s.dropItem, { borderBottomColor: colors.border }]} onPress={() => { setMenuOpen(false); router.push(`/edit-post?id=${listing.id}` as any); }}>
+              <Ionicons name="create-outline" size={18} color={colors.text} />
+              <Text style={[s.dropItemText, { color: colors.text }]}>Edit Listing</Text>
             </TouchableOpacity>
-            <View style={{ flexDirection: 'row', gap: 10 }}>
-              <TouchableOpacity style={[s.overlayBtn, { backgroundColor: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.93)' }]} onPress={handleShare}>
-                <Ionicons name="share-social-outline" size={22} color={isDark ? '#fff' : '#000'} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.overlayBtn, { backgroundColor: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.93)' }]} onPress={toggleWishlist}>
-                <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={22} color={isSaved ? '#FF3B30' : (isDark ? '#fff' : '#000')} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.overlayBtn, { backgroundColor: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.93)' }]} onPress={() => setMenuOpen(v => !v)}>
-                <Ionicons name="ellipsis-vertical" size={22} color={isDark ? '#fff' : '#000'} />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {menuOpen && (
-            <View style={[s.dropdown, { backgroundColor: colors.card, shadowColor: isDark ? '#000' : '#888' }]}>
-              {isOwner && (
-                <TouchableOpacity style={[s.dropItem, { borderBottomColor: colors.border }]} onPress={() => { setMenuOpen(false); router.push(`/edit-post?id=${listing.id}` as any); }}>
-                  <Ionicons name="create-outline" size={18} color={colors.text} />
-                  <Text style={[s.dropItemText, { color: colors.text }]}>Edit Listing</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity style={[s.dropItem, { borderBottomColor: colors.border }]} onPress={handleReport}>
-                <Ionicons name="flag-outline" size={18} color="#FF3B30" />
-                <Text style={[s.dropItemText, { color: '#FF3B30' }]}>Report Listing</Text>
-              </TouchableOpacity>
-              {!isOwner && (
-                <TouchableOpacity style={[s.dropItem, { borderBottomWidth: 0 }]} onPress={() => { setMenuOpen(false); handleReportUser(); }}>
-                  <Ionicons name="person-remove-outline" size={18} color="#FF3B30" />
-                  <Text style={[s.dropItemText, { color: '#FF3B30' }]}>Report Seller</Text>
-                </TouchableOpacity>
-              )}
-            </View>
           )}
+          <TouchableOpacity style={[s.dropItem, { borderBottomColor: colors.border }]} onPress={handleReport}>
+            <Ionicons name="flag-outline" size={18} color="#FF3B30" />
+            <Text style={[s.dropItemText, { color: '#FF3B30' }]}>Report Listing</Text>
+          </TouchableOpacity>
+          {!isOwner && (
+            <TouchableOpacity style={[s.dropItem, { borderBottomWidth: 0 }]} onPress={() => { setMenuOpen(false); handleReportUser(); }}>
+              <Ionicons name="person-remove-outline" size={18} color="#FF3B30" />
+              <Text style={[s.dropItemText, { color: '#FF3B30' }]}>Report Seller</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
 
+      <ScrollView 
+        showsVerticalScrollIndicator={false} 
+        contentContainerStyle={{ paddingBottom: 100 }}
+      >
+        <View style={[s.carouselWrap, { backgroundColor: colors.backgroundSecondary }]}>
           {images.length > 0 ? (
             <>
               <FlatList
@@ -511,9 +490,9 @@ export default function ListingDetails() {
 
           <Text style={[s.secTitle, { color: colors.text }]}>Seller Information</Text>
 
-          <TouchableOpacity
-            style={[s.sellerCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-            activeOpacity={0.85}
+          {/* ✨ FIXED: Replaced standard TouchableOpacity with NeumorphicCard */}
+          <NeumorphicCard
+            style={s.sellerCard}
             onPress={() => router.push(`/user/${listing.seller_id}` as any)}
           >
             <View style={s.sellerAvatarWrap}>
@@ -551,7 +530,7 @@ export default function ListingDetails() {
               <Text style={s.viewProfileText}>View Profile</Text>
               <Ionicons name="chevron-forward" size={14} color="#007AFF" />
             </View>
-          </TouchableOpacity>
+          </NeumorphicCard>
 
           {!isOwner && currentUserId && (
             <TouchableOpacity style={s.reportSellerLink} onPress={handleReportUser}>
@@ -560,37 +539,39 @@ export default function ListingDetails() {
             </TouchableOpacity>
           )}
 
-          <View style={[s.safetyCard, { backgroundColor: isDark ? '#142e19' : '#f1f8f2', borderColor: isDark ? '#1f4726' : '#c8e6c9' }]}>
+          {/* ✨ FIXED: Removed manual buggy shadows and turned this into a clean inset panel */}
+          <View style={[s.safetyCard, { backgroundColor: isDark ? '#142e19' : '#f1f8f2' }]}>
             <Ionicons name="shield-checkmark" size={20} color="#2E7D32" />
             <View style={{ flex: 1 }}>
               <Text style={[s.safetyTitle, { color: isDark ? '#4ade80' : '#2E7D32' }]}>Stay Safe on Boltzy</Text>
               <Text style={[s.safetyText, { color: isDark ? '#22c55e' : '#388E3C' }]}>Meet in public · Inspect before buying · Never pay in advance</Text>
             </View>
           </View>
-
-          <View style={{ height: 32 }} />
         </View>
       </ScrollView>
 
       {!listing.is_sold && !isOwner && isApproved && (
-        <View style={[s.bottomBar, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
-          <TouchableOpacity style={[s.wishBtn, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]} onPress={toggleWishlist}>
-            <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={22} color={isSaved ? '#FF3B30' : colors.text} />
-          </TouchableOpacity>
+        <View style={[s.bottomBar, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: insets.bottom > 0 ? insets.bottom : 16 }]}>
           
-          <TouchableOpacity style={[s.chatBtn, { backgroundColor: colors.backgroundSecondary }]} onPress={startChat}>
+          {/* ✨ FIXED: Upgraded Bottom Buttons to Neumorphic Cards */}
+          <NeumorphicCard style={s.wishBtn} onPress={toggleWishlist}>
+            <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={22} color={isSaved ? '#FF3B30' : colors.text} />
+          </NeumorphicCard>
+          
+          <NeumorphicCard style={s.chatBtn} onPress={startChat}>
             <Ionicons name="chatbubbles" size={20} color={colors.text} />
             <Text style={[s.chatBtnText, { color: colors.text }]}>Chat</Text>
-          </TouchableOpacity>
+          </NeumorphicCard>
           
-          <TouchableOpacity style={s.callBtn} onPress={handleOffer}>
-            <Ionicons name="pricetag" size={20} color="#fff" />
-            <Text style={s.callBtnText}>Make Offer</Text>
+          <TouchableOpacity style={[s.callBtn, { backgroundColor: colors.tint }]} onPress={handleOffer} activeOpacity={0.7}>
+            <Ionicons name="pricetag" size={20} color={isDark ? '#000' : '#fff'} />
+            <Text style={[s.callBtnText, { color: isDark ? '#000' : '#fff' }]}>Make Offer</Text>
           </TouchableOpacity>
         </View>
       )}
+      
       {listing.is_sold && (
-        <View style={[s.soldBar, { backgroundColor: colors.backgroundSecondary, borderTopColor: colors.border }]}>
+        <View style={[s.soldBar, { backgroundColor: colors.backgroundSecondary, borderTopColor: colors.border, paddingBottom: insets.bottom > 0 ? insets.bottom : 18 }]}>
           <Ionicons name="checkmark-circle" size={18} color={colors.textSecondary} />
           <Text style={[s.soldBarText, { color: colors.textSecondary }]}>This item has been sold</Text>
         </View>
@@ -667,15 +648,24 @@ const s = StyleSheet.create({
   carouselWrap:         { width: '100%', height: 320, position: 'relative' },
   carouselImg:          { width: SCREEN_W, height: 320 },
   noImageBox:           { flex: 1, justifyContent: 'center', alignItems: 'center' },
- overlayHeader: { position: 'absolute', zIndex: 20, left: 16, right: 16, flexDirection: 'row', justifyContent: 'space-between' },
+  
+  overlayHeader: { 
+    position: 'absolute', 
+    zIndex: 50, 
+    left: 16, 
+    right: 16, 
+    flexDirection: 'row', 
+    justifyContent: 'space-between' 
+  },
   overlayBtn: {
     width: 38, height: 38, borderRadius: 19,
     justifyContent: 'center', alignItems: 'center',
+    // Kept light shadow here since it's floating over images
     ...Platform.select({ web: { boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }, default: { elevation: 4 } }),
   },
   dropdown: {
-    position: 'absolute', zIndex: 30,
-    top: Platform.OS === 'ios' ? 100 : 68, right: 16,
+    position: 'absolute', zIndex: 60,
+    right: 16,
     borderRadius: 14, paddingVertical: 6, minWidth: 190,
     ...Platform.select({ web: { boxShadow: '0 4px 16px rgba(0,0,0,0.13)' }, default: { elevation: 8 } }),
   },
@@ -733,10 +723,9 @@ const s = StyleSheet.create({
   },
   highlightChipText:    { fontSize: 13, fontWeight: '600' },
 
+  // ✨ Cleaned up Seller Card
   sellerCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
-    borderRadius: 16, padding: 16,
-    borderWidth: 1, marginBottom: 10,
+    flexDirection: 'row', alignItems: 'center', gap: 14, borderRadius: 16, padding: 16, marginBottom: 10,
   },
   sellerAvatarWrap:     { position: 'relative' },
   sellerAvatarImg:      { width: 58, height: 58, borderRadius: 29 },
@@ -758,24 +747,20 @@ const s = StyleSheet.create({
   reportSellerLink:     { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 16, paddingLeft: 4 },
   reportSellerText:     { fontSize: 12, color: '#FF3B30', fontWeight: '500' },
 
+  // ✨ Cleaned up Safety Card
   safetyCard: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 12,
-    borderRadius: 14, padding: 14,
-    borderWidth: 1,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12, borderRadius: 14, padding: 14,
   },
   safetyTitle:          { fontSize: 14, fontWeight: '700', marginBottom: 2 },
   safetyText:           { fontSize: 13, lineHeight: 19 },
 
+  // ✨ Cleaned up Bottom Bar
   bottomBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    padding: 16, paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+    position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16,
     borderTopWidth: 1,
-    ...Platform.select({ web: { boxShadow: '0 -2px 12px rgba(0,0,0,0.06)' }, default: { elevation: 8 } }),
   },
   wishBtn: {
-    width: 50, height: 50, borderRadius: 14,
-    justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1,
+    width: 50, height: 50, borderRadius: 14, justifyContent: 'center', alignItems: 'center',
   },
   chatBtn: {
     flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
@@ -784,10 +769,11 @@ const s = StyleSheet.create({
   chatBtnText:          { fontSize: 16, fontWeight: 'bold', marginLeft: 8 },
   callBtn: {
     flex: 1.4, flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
-    backgroundColor: '#000', paddingVertical: 15, borderRadius: 14,
+    paddingVertical: 15, borderRadius: 14,
   },
-  callBtnText:          { fontSize: 16, fontWeight: 'bold', color: '#fff', marginLeft: 8 },
+  callBtnText:          { fontSize: 16, fontWeight: 'bold', marginLeft: 8 },
   soldBar: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     padding: 18, borderTopWidth: 1,
   },

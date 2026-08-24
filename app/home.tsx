@@ -8,14 +8,21 @@ import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-spe
 import { useTheme } from '../context/ThemeContext';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
+import NeumorphicCard from '../components/NeumorphicCard';
 
 
 import {
   ActivityIndicator, Animated, FlatList, StyleSheet, Text, TouchableOpacity,
   View, Alert, TextInput, ScrollView, Modal, Platform,
-  KeyboardAvoidingView, useWindowDimensions, Linking, Share,
+  KeyboardAvoidingView, useWindowDimensions, Linking, Share, 
+  Keyboard // ✨ Add Keyboard here!
 } from 'react-native';
+
+import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import { Switch } from 'react-native';
+import Toast from 'react-native-toast-message'; // ✨ Add this missing import!
+
 import { supabase } from '../supabase';
 import { getCurrentUser } from '../utils/auth';
 import * as Location from 'expo-location';
@@ -76,8 +83,18 @@ export default function Home() {
   const { width } = useWindowDimensions();
   const { colors, isDark, toggleTheme } = useTheme();
   const { lang, t, translateUGC } = useLanguage();
-  // ✨ ADD THIS LINE
   const insets = useSafeAreaInsets();
+
+    useEffect(() => {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+    }),
+  });
+}, []);
 
   const [safetyModalVisible, setSafetyModalVisible] = useState(false);
   const [isNotifModalVisible, setIsNotifModalVisible] = useState(false);
@@ -127,6 +144,26 @@ export default function Home() {
   const [headerImgError, setHeaderImgError]   = useState(false);
   const [modalImgError, setModalImgError]     = useState(false);
 
+  // ✨ Manual Keyboard Tracker for Android Modals
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardHeight(e.endCoordinates?.height || 0);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+    
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
   const [confirmModalConfig, setConfirmModalConfig] = useState({ title: '', message: '', isDestructive: false });
   const [pendingConfirmAction, setPendingConfirmAction] = useState<{ action: () => void } | null>(null);
@@ -137,19 +174,66 @@ export default function Home() {
     setConfirmModalVisible(true);
   };
 
-  const [notifications, setNotifications] = useState([
-    { id: '1', title: 'Ad is Live! 🎉', message: 'Your ad went live successfully.', icon: 'checkmark-circle', color: '#34C759', time: 'Just now' },
-    { id: '2', title: 'Action Required', message: 'Modify your ad to make it live. It may violate community guidelines.', icon: 'alert-circle', color: '#F5A623', time: '2 hours ago' },
-    { id: '3', title: 'Ad Expired', message: 'Your ad has expired. Relist it to keep selling!', icon: 'time', color: '#8E8E93', time: '1 day ago' },
-    { id: '4', title: 'Ad Deleted', message: 'Your ad has been successfully deleted.', icon: 'trash', color: '#FF3B30', time: '2 days ago' },
-    { id: '5', title: 'Security Alert', message: 'Your password was changed successfully.', icon: 'lock-closed', color: '#007AFF', time: '3 days ago' },
-    { id: '6', title: 'Report Submitted', message: 'Your report against an ad/user was submitted to our moderation team.', icon: 'flag', color: '#007AFF', time: '1 week ago' },
-    { id: '7', title: 'Account Warning', message: 'You have been reported. Please contact support to resolve the issue.', icon: 'warning', color: '#FF3B30', time: '1 week ago' }
-  ]);
+  const [notifications, setNotifications] = useState<any[]>([]);
 
   const { openProfile } = useLocalSearchParams();
 
+// ✨ PASTE THE NOTIFICATION LOGIC HERE!
+  const [pushEnabled, setPushEnabled] = useState(false);
+
+  const togglePushNotifications = async (newValue: boolean) => {
+    setPushEnabled(newValue);
+    const user = await getCurrentUser();
+    if (!user) return;
+
+    if (newValue) {
+      if (!Device.isDevice) {
+        Toast.show({ type: 'error', text1: 'Physical Device Required', text2: 'Push notifications only work on real phones.', position: 'top' });
+        setPushEnabled(false);
+        return;
+      }
+
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      let finalStatus = existingStatus;
+      
+      if (existingStatus !== 'granted') {
+        const { status } = await Notifications.requestPermissionsAsync();
+        finalStatus = status;
+      }
+
+      if (finalStatus !== 'granted') {
+        Toast.show({ type: 'error', text1: 'Permission Denied', text2: 'Please enable notifications in your phone settings.', position: 'top' });
+        setPushEnabled(false);
+        return;
+      }
+
+      try {
+        const projectId = '92722222-b5c1-477e-ab75-430b3970710d'; 
+        const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+        
+        await supabase.from('profiles').update({ push_token: token }).eq('id', user.id);
+        Toast.show({ type: 'success', text1: 'Notifications Enabled', text2: 'You will now receive live alerts.', position: 'top' });
+      } catch (error: any) {
+        setPushEnabled(false);
+        Toast.show({ type: 'error', text1: 'Setup Failed', text2: error.message, position: 'top' });
+      }
+
+    } else {
+      await supabase.from('profiles').update({ push_token: null }).eq('id', user.id);
+      Toast.show({ type: 'info', text1: 'Notifications Muted', position: 'top' });
+    }
+  };
+  // ✨ END OF PASTED LOGIC
+
   const [isListening, setIsListening]             = useState(false);
+
+  // ✨ PAGINATION STATES
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const PAGE_SIZE = 20;
+  const MAX_ADS_LIMIT = 150;
+
   const [voiceModalVisible, setVoiceModalVisible] = useState(false);
   const voicePulse = useRef(new Animated.Value(1)).current;
   const unreadRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -158,8 +242,13 @@ export default function Home() {
   const fetchSmartLocationRef = useRef<(force?: boolean) => Promise<void>>(async () => {});
   const queueUnreadCountRefreshRef = useRef<(userId: string) => void>(() => {});
   
+  const feedRef = useRef<FlatList>(null);
 
   const numColumns = width > 1024 ? 4 : width > 768 ? 3 : 2;
+  // ✨ Calculates exact width: Total screen width MINUS the side paddings MINUS the gaps, divided by columns.
+  const totalGapSpace = (numColumns - 1) * 16;
+  const paddingSpace = 32; // 16px left padding + 16px right padding
+  const cardWidth = (width - paddingSpace - totalGapSpace) / numColumns;
 
   const activeFilterCount = [
     activeSort !== 'newest',
@@ -169,7 +258,75 @@ export default function Home() {
     activePostedWithin !== 'All Time',
   ].filter(Boolean).length;
 
+  const fetchNotifications = async () => {
+  const user = await getCurrentUser();
+  if (!user) return;
+  const { data } = await supabase
+    .from('notifications') // Assumes you have a notifications table
+    .select('*')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
+    .limit(20);
+  if (data) setNotifications(data);
+};
+
+// ✨ Check how many notifications are actually unread
+  const unreadNotifsCount = notifications.filter(n => !n.is_read).length;
+
+  // ✨ Mark them as read when the user clicks the bell
+  const handleOpenNotifications = async () => {
+    setIsNotifModalVisible(true);
+    const unreadIds = notifications.filter(n => !n.is_read).map(n => n.id);
+    if (unreadIds.length > 0) {
+      setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+      await supabase.from('notifications').update({ is_read: true }).in('id', unreadIds);
+    }
+  };
   
+// ✨ 1. Handle clicking the notification body
+  const handleNotificationPress = (notif: any) => {
+    setIsNotifModalVisible(false); // Close the notification center
+
+    if (notif.type === 'listing_approved' && notif.listing_id) {
+      // Ad is live -> Go straight to the public listing
+      router.push(('/listing/' + notif.listing_id) as any);
+    } 
+    else if (notif.type === 'listing_rejected' && notif.listing_id) {
+      // Ad rejected -> Go straight to the edit screen to fix it
+      router.push(('/edit-post?id=' + notif.listing_id) as any);
+    } 
+    else if (notif.type === 'listing_pending') {
+      // Ad pending -> Go to the My Ads dashboard
+      router.push('/my-ads' as any);
+    } 
+    else {
+      // Fallback for any future notification types (like chats)
+      router.push('/my-ads' as any);
+    }
+  };
+
+ // ✨ 2. Handle clicking the "X" to delete
+  const deleteNotification = async (notifId: string) => {
+    // Instantly remove it from the screen for a snappy UI
+    setNotifications(prev => prev.filter(n => n.id !== notifId));
+    
+    // Tell the database to delete it
+    const { error } = await supabase.from('notifications').delete().eq('id', notifId);
+    
+    // ✨ Catch the silent failure!
+    if (error) {
+      console.error("Delete Error:", error.message);
+      Alert.alert(
+        "Database Blocked", 
+        "Supabase blocked the deletion. Please enable the 'DELETE' RLS policy for the notifications table in your Supabase dashboard."
+      );
+      // Re-fetch to sync back up with the server since the local delete failed
+      fetchNotifications(); 
+    }
+  };
+
+  
+
   useEffect(() => {
     if (openProfile === 'true') {
       openProfileModal();
@@ -213,6 +370,8 @@ export default function Home() {
     right: 0,
     bottom: 0,
   };
+
+  const [pushEnabled, setPushEnabled] = useState(false);
 
   return (
     <View style={{ width: cardWidth, marginBottom: 16 }}>
@@ -303,6 +462,9 @@ export default function Home() {
         if (!currentUser) return;
         user = currentUser;
 
+        // ✨ Fetch notifications exactly ONCE when the screen comes into focus
+        fetchNotifications();
+
         supabase.from('profiles').select('*').eq('id', user.id).single().then(({data}) => {
           if (data) {
             setHeaderProfile(data);
@@ -315,6 +477,13 @@ export default function Home() {
         const channel = supabase.channel(channelName)
           .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
             queueUnreadCountRefreshRef.current(user.id);
+          })
+
+          // ✨ NEW: Instantly catch new notifications from the database
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, (payload) => {
+            if (payload.new.user_id === user.id) {
+              setNotifications(prev => [payload.new, ...prev]);
+            }
           });
         
         channel.subscribe();
@@ -367,94 +536,96 @@ export default function Home() {
 
   const fetchSmartLocation = async (force = false) => {
     try {
-      const getGps = async () => {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') throw new Error('denied');
-        let loc = await Location.getLastKnownPositionAsync({ maxAge: 60000 });
-        if (!loc) loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        
-        if (loc) {
-          setUserLat(loc.coords.latitude);
-          setUserLng(loc.coords.longitude);
-        }
-
-        const geocode = await Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
-        if (geocode.length > 0) {
-          const geo = geocode[0];
-          // Grab the most granular area possible
-          const area = geo.district || geo.subregion || geo.street || '';
-          // Grab the city or fallback to region
-          const city = geo.city || geo.region || '';
-          const state = geo.region || '';
-          return { area, city, state };
-        }
-        throw new Error('no_geocode');
-      };
-
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject('timeout'), 3000));
-
-      let locData: any = null;
-      try {
-        locData = await Promise.race([getGps(), timeoutPromise]);
-      } catch (err) {
-        // Fallback to IP-based location if GPS fails
-        const res = await fetch('https://ipinfo.io/json');
-        const data = await res.json();
-        if (data.city) locData = { city: data.city, state: data.region || '', area: '' };
-      }
-
-      if (locData) {
+      // 🚀 1. FAST PATH: Instant IP lookup for the feed (Takes ~100ms)
+      const res = await fetch('https://ipinfo.io/json');
+      const data = await res.json();
+      
+      if (data.city) {
         setActiveLocation('Auto');
-        setUserArea(locData.area);
-        setUserCity(locData.city);
-        setUserState(locData.state);
+        setUserCity(data.city);
+        setUserState(data.region || '');
+        
+        // 🚀 2. BACKGROUND GPS: Fetches precise coordinates silently
+        // This runs in the background and no longer blocks the feed from rendering!
+        Location.requestForegroundPermissionsAsync().then(({ status }) => {
+          if (status === 'granted') {
+            Location.getLastKnownPositionAsync({ maxAge: 3600000 }).then(loc => {
+              if (loc) { 
+                setUserLat(loc.coords.latitude); 
+                setUserLng(loc.coords.longitude); 
+              }
+            }).catch(() => {});
+          }
+        }).catch(() => {});
       }
     } catch (err) {
       console.log('Smart Loc Error:', err);
     }
   };
 
-  const fetchListings = async ({ force = false, pullToRefresh = false }: { force?: boolean; pullToRefresh?: boolean } = {}) => {
-  if (pullToRefresh) setRefreshing(true);
-  else if (listings.length === 0) setLoading(true);
-
-  try {
-    const user = await getCurrentUser();
-    let blockedIds: string[] = [];
-    if (user) {
-      const { data: blockedData } = await supabase.from('blocked_users').select('blocked_id').eq('blocker_id', user.id);
-      if (blockedData) blockedIds = blockedData.map(b => b.blocked_id);
+ const fetchListings = async ({ force = false, pullToRefresh = false, nextPage = 0 }: { force?: boolean; pullToRefresh?: boolean; nextPage?: number } = {}) => {
+    if (pullToRefresh) {
+      setRefreshing(true);
+      setPage(0);
+      setHasMore(true);
+    } else if (nextPage === 0 && listings.length === 0) {
+      setLoading(true);
+    } else if (nextPage > 0) {
+      setIsLoadingMore(true);
     }
 
-    // ✨ Resilient query: handles NULL values properly
-    let query = supabase
-      .from('listings')
-      .select('*')
-      .or('is_sold.eq.false,is_sold.is.null')
-      .order('created_at', { ascending: false });
+    try {
+      const user = await getCurrentUser();
+      
+      // ✨ THE FIX: We now call our powerful backend algorithm!
+      const { data, error } = await supabase.rpc('get_smart_feed', {
+        p_user_id: user?.id || null,
+        p_category: selectedCategory,
+        p_search_query: searchQuery.trim(),
+        p_limit: PAGE_SIZE,
+        p_offset: nextPage * PAGE_SIZE
+      });
 
-    if (blockedIds.length > 0) {
-      query = query.not('seller_id', 'in', `(${blockedIds.join(',')})`);
+      if (error) throw error;
+      
+      const newData = data || [];
+      
+      // Combine new data with existing data if we are scrolling down
+      let combinedData = nextPage === 0 ? newData : [...listings, ...newData];
+      
+      // ENFORCE THE 150 AD HARD LIMIT
+      if (combinedData.length >= MAX_ADS_LIMIT) {
+        combinedData = combinedData.slice(0, MAX_ADS_LIMIT);
+        setHasMore(false);
+      } else if (newData.length < PAGE_SIZE) {
+        setHasMore(false); // No more ads exist in the database
+      } else {
+        setHasMore(true);
+      }
+
+      setListings(combinedData);
+      setPage(nextPage);
+
+      // Pass the woven data to the local filter state
+      applyFilters(
+        searchQuery, selectedCategory, activeLocation, combinedData, 
+        userArea, userCity, userState, 
+        activeSort, activePriceMin, activePriceMax, activeCondition, activePostedWithin
+      );
+    } catch (err: any) {
+      console.error('Fetch error:', err);
     }
-
-    const { data, error } = await query;
-    if (error) throw error;
     
-    let finalData = data || [];
+    setLoading(false);
+    setRefreshing(false);
+    setIsLoadingMore(false);
+  };
 
-    setListings(finalData);
-    applyFilters(
-      searchQuery, selectedCategory, activeLocation, finalData, 
-      userArea, userCity, userState, 
-      activeSort, activePriceMin, activePriceMax, activeCondition, activePostedWithin
-    );
-  } catch (err: any) {
-    console.error('Fetch error:', err);
-  }
-  
-  setLoading(false);
-  setRefreshing(false);
-};
+  // ✨ INFINITE SCROLL TRIGGER (Make sure to keep this!)
+  const loadMoreListings = () => {
+    if (!hasMore || isLoadingMore || loading || refreshing) return;
+    fetchListings({ nextPage: page + 1 });
+  };
 
   const applyFilters = (
     query:        string,
@@ -545,44 +716,8 @@ export default function Home() {
         result.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()); 
         break;
       default:           
-        const premiumAds = result.filter(ad => ad.is_premium)
-                                 .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        
-        const organicInterested = result.filter(ad => !ad.is_premium && userInterests.includes(ad.category))
-                                        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-                                        
-        const organicDiscovery = result.filter(ad => !ad.is_premium && !userInterests.includes(ad.category))
-                                       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        
-        const wovenFeed: any[] = [];
-        let pIndex = 0;
-        let iIndex = 0;
-        let dIndex = 0;
-
-        if (premiumAds[pIndex]) wovenFeed.push(premiumAds[pIndex++]);
-        if (premiumAds[pIndex]) wovenFeed.push(premiumAds[pIndex++]);
-
-        while (iIndex < organicInterested.length || dIndex < organicDiscovery.length) {
-          let addedInterested = 0;
-          while (addedInterested < 3 && iIndex < organicInterested.length) {
-            wovenFeed.push(organicInterested[iIndex++]);
-            addedInterested++;
-          }
-          
-          if (dIndex < organicDiscovery.length) {
-             wovenFeed.push(organicDiscovery[dIndex++]);
-          }
-
-          if (pIndex < premiumAds.length) {
-            wovenFeed.push(premiumAds[pIndex++]);
-          }
-        }
-
-        while (pIndex < premiumAds.length) {
-          wovenFeed.push(premiumAds[pIndex++]);
-        }
-
-        result = wovenFeed;
+        // ✨ THE FIX: The backend RPC has already woven and sorted the feed perfectly. 
+        // We no longer need the heavy client-side while-loop!
         break;
     }
 
@@ -890,12 +1025,11 @@ export default function Home() {
       : null;
 
     return (
-      <TouchableOpacity
+      <NeumorphicCard
         style={[
-          styles.card, 
-          { backgroundColor: colors.card, borderColor: colors.border },
-          numColumns > 1 && { flex: 1, maxWidth: width > 1024 ? '23%' : width > 768 ? '31%' : '48%' },
-          item.is_premium && { borderColor: '#F5A623', borderWidth: 2, backgroundColor: isDark ? '#1a180f' : '#fffdf5' }
+          styles.card,
+          { width: cardWidth }, // ✨ Forces the exact mathematical width, preventing any collapsing
+          item.is_premium && { borderColor: '#F5A623', borderWidth: 2 }
         ]}
         onPress={() => router.push(('/listing/' + item.id) as any)}
       >
@@ -907,21 +1041,22 @@ export default function Home() {
         {item.is_premium && (
           <View style={{ position: 'absolute', top: 8, left: 8, backgroundColor: '#F5A623', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             <Ionicons name="star" size={10} color="#fff" />
-            <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#fff' }}>{t('promoted')}</Text>
+            <Text style={{ fontFamily: 'Jakarta-Bold', fontSize: 10, color: '#fff', textTransform: 'uppercase', letterSpacing: 0.5 }}>{t('promoted')}</Text>
           </View>
         )}
 
         <View style={styles.cardContent}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <Text style={[styles.price, { color: colors.text }]}>₹{item.price}</Text>
-            <TouchableOpacity onPress={() => toggleWishlist(item.id)}>
+            <TouchableOpacity onPress={() => toggleWishlist(item.id)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Ionicons
                 name={savedIds.includes(item.id) ? 'heart' : 'heart-outline'}
-                size={26}
+                size={24}
                 color={savedIds.includes(item.id) ? '#FF3B30' : colors.textSecondary}
               />
             </TouchableOpacity>
           </View>
+
           
           <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>{displayTitle}</Text>
           
@@ -932,13 +1067,14 @@ export default function Home() {
           )}
 
           <View style={styles.locationRow}>
-            <Ionicons name="location-outline" size={12} color={colors.textSecondary} />
-            <Text style={[styles.location, { color: colors.textSecondary }]} numberOfLines={1}>
+            <Ionicons name="location-outline" size={14} color={colors.textSecondary} />
+            {/* ✨ Added flex: 1 and changed numberOfLines to 2 so long addresses don't chop abruptly */}
+            <Text style={[styles.location, { color: colors.textSecondary, flex: 1 }]} numberOfLines={2}>
               {distance ? `${distance} km away • ` : ''}{displayLocation}
             </Text>
           </View>
         </View>
-      </TouchableOpacity>
+      </NeumorphicCard>
     );
   };
 
@@ -951,8 +1087,7 @@ export default function Home() {
         {/* ✨ BRAND LOGO */}
         <Image 
           source={isDark ? require('../assets/images/logo-light.png') : require('../assets/images/logo-dark.png')} 
-          // ✨ Increased dimensions for tagline readability & pulled the bottom margin up!
-          style={{ width: 185, height: 60, marginBottom: -10, marginLeft: -4 }} 
+          style={{ width: 150, height: 50, marginLeft: 0 }} // ✨ Balanced proportions
           contentFit="contain"
           transition={200}
         />
@@ -975,10 +1110,13 @@ export default function Home() {
             </>
           )}
 
-          <TouchableOpacity onPress={() => setIsNotifModalVisible(true)}>
+          {/* ✨ Replaced the hardcoded dot with conditional logic & new handler */}
+          <TouchableOpacity onPress={handleOpenNotifications}>
             <View>
               <Ionicons name="notifications-outline" size={26} color={colors.text} />
-              <View style={{ position: 'absolute', top: 0, right: 2, width: 10, height: 10, borderRadius: 5, backgroundColor: '#FF3B30', borderWidth: 1, borderColor: colors.card }} />
+              {unreadNotifsCount > 0 && (
+                <View style={{ position: 'absolute', top: 0, right: 2, width: 10, height: 10, borderRadius: 5, backgroundColor: '#FF3B30', borderWidth: 1, borderColor: colors.card }} />
+              )}
             </View>
           </TouchableOpacity>
 
@@ -1048,7 +1186,12 @@ export default function Home() {
       </View>
 
       {/* ── VOICE SEARCH MODAL ────────────────── */}
-      <Modal visible={voiceModalVisible} transparent animationType="fade">
+      <Modal 
+        visible={voiceModalVisible} 
+        transparent 
+        animationType="fade" 
+        onRequestClose={stopVoiceSearch} // ✨ THE FIX
+      >
         <TouchableOpacity style={styles.voiceOverlay} activeOpacity={1} onPress={stopVoiceSearch}>
           <View style={[styles.voiceCard, { backgroundColor: colors.card }]}>
             <Animated.View style={[styles.voicePulseRing, { transform: [{ scale: voicePulse }] }]} />
@@ -1108,7 +1251,7 @@ export default function Home() {
       )}
 
       {/* ── FEED ──────────────────────────────── */}
-      // ✅ NEW:
+      
 {loading ? (
   <FlatList
     key={`skeleton-grid-${numColumns}`}
@@ -1142,6 +1285,7 @@ export default function Home() {
         </View>
       ) : (
         <FlatList
+          ref={feedRef} // ✨ Attach the ref here!
           key={`grid-${numColumns}`}
           numColumns={numColumns}
           columnWrapperStyle={numColumns > 1 ? { gap: 16 } : undefined}
@@ -1157,13 +1301,27 @@ export default function Home() {
           maxToRenderPerBatch={8}
           windowSize={5}
           removeClippedSubviews={Platform.OS === 'android'}
+          // ✨ INFINITE SCROLL PROPS ADDED BELOW
+          onEndReached={loadMoreListings}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={
+            isLoadingMore ? (
+              <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                <ActivityIndicator size="small" color={colors.tint} />
+              </View>
+            ) : !hasMore && filteredListings.length > 0 ? (
+              <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '500' }}>You've reached the end of the feed.</Text>
+              </View>
+            ) : null
+          }
         />
       )}
 
       {/* ── BOTTOM TAB BAR ────────────────────── */}
       {Platform.OS !== 'web' && width <= 768 && (
         <View style={[styles.bottomTabBar, { backgroundColor: colors.card, borderTopColor: colors.border, paddingBottom: insets.bottom > 0 ? insets.bottom : 10, height: 60 + insets.bottom }]}>
-          <TouchableOpacity style={styles.tabItem} onPress={() => {}}>
+          <TouchableOpacity style={styles.tabItem} onPress={() => feedRef.current?.scrollToOffset({ offset: 0, animated: true })}>
             <Ionicons name="home" size={24} color={colors.text} />
             <Text style={[styles.tabText, { color: colors.text, fontWeight: 'bold' }]}>{t('tab_home')}</Text>
           </TouchableOpacity>
@@ -1195,8 +1353,8 @@ export default function Home() {
       )}
 
       {/* ════════════ FILTER & SORT MODAL ════════════ */}
-      <Modal visible={isFilterModalVisible} transparent animationType="slide">
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+      <Modal visible={isFilterModalVisible} transparent animationType="slide" onRequestClose={() => setIsFilterModalVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setIsFilterModalVisible(false)} />
           <View style={[styles.filterModalCard, { backgroundColor: colors.card }]}>
 
@@ -1368,7 +1526,12 @@ export default function Home() {
       </Modal>
 
       {/* ════════════ UNIFIED SETTINGS & ACCOUNT MODAL ════════════ */}
-      <Modal visible={isProfileMenuVisible} transparent animationType="fade">
+      <Modal 
+        visible={isProfileMenuVisible} 
+        transparent 
+        animationType="fade"
+        onRequestClose={() => setIsProfileMenuVisible(false)} // ✨ THE FIX
+      >
         <TouchableOpacity style={styles.fullScreenModalOverlay} activeOpacity={1} onPress={() => setIsProfileMenuVisible(false)}>
           <TouchableOpacity activeOpacity={1} style={[styles.fullProfileCard, { backgroundColor: colors.card }]}>
             <View style={styles.profileModalHeader}>
@@ -1405,6 +1568,7 @@ export default function Home() {
                   )}
                 </View>
 
+
                 {/* ✨ PREFERENCES ✨ */}
                 <View style={[styles.profileActionDivider, { backgroundColor: colors.border }]} />
 
@@ -1413,6 +1577,23 @@ export default function Home() {
                   <Text style={[styles.profileActionText, { color: colors.text }]}>App Language & Identity</Text>
                   <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: 'auto' }} />
                 </TouchableOpacity>
+
+                {/* ✨ PUSH NOTIFICATIONS TOGGLE ✨ */}
+                <View style={[styles.profileActionBtn, { justifyContent: 'space-between', paddingRight: 4 }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <View style={[styles.profileActionIconWrap, { backgroundColor: isDark ? '#064e3b' : '#e8f5e9' }]}>
+                      <Ionicons name="notifications" size={22} color="#4CAF50" />
+                    </View>
+                    <Text style={[styles.profileActionText, { color: colors.text }]}>Push Notifications</Text>
+                  </View>
+                  <Switch
+                    value={pushEnabled}
+                    onValueChange={togglePushNotifications}
+                    trackColor={{ false: colors.border, true: '#4CAF50' }}
+                    thumbColor={'#ffffff'}
+                    ios_backgroundColor={colors.border}
+                  />
+                </View>
 
                 <TouchableOpacity style={styles.profileActionBtn} onPress={() => { setIsProfileMenuVisible(false); router.push('/billing' as any); }}>
                   <View style={[styles.profileActionIconWrap, { backgroundColor: colors.backgroundSecondary }]}><Ionicons name="card" size={22} color={colors.text} /></View>
@@ -1453,9 +1634,18 @@ export default function Home() {
 
 
       {/* ════════════ LOCATION MODAL ════════════ */}
-      <Modal visible={isLocationModalVisible} transparent animationType="slide">
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-          <View style={[styles.locationModalCard, { backgroundColor: colors.card }]}>
+      <Modal 
+        visible={isLocationModalVisible} 
+        transparent 
+        animationType="slide"
+        onRequestClose={() => setIsLocationModalVisible(false)} // ✨ THE FIX
+      >
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+          <View style={[styles.locationModalCard, { 
+            backgroundColor: colors.card, 
+            // ✨ DYNAMIC KEYBOARD PUSH: Measures the Android keyboard and pushes the card up!
+            paddingBottom: Platform.OS === 'android' && keyboardHeight > 0 ? keyboardHeight + 20 : Math.max(insets.bottom, 24) + 16 
+          }]}>
             <View style={styles.helpHeader}>
               <Text style={[styles.helpTitle, { color: colors.text }]}>{t('select_loc')}</Text>
               <TouchableOpacity onPress={() => setIsLocationModalVisible(false)}>
@@ -1495,9 +1685,13 @@ export default function Home() {
       </Modal>
 
       {/* ════════════ EMAIL UPDATE MODAL ════════════ */}
-      <Modal visible={isEmailModalVisible} transparent animationType="fade">
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-          <View style={[styles.helpMenuCard, { backgroundColor: colors.card }]}>
+      <Modal visible={isEmailModalVisible} transparent animationType="fade"onRequestClose={() => setIsEmailModalVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+          <View style={[styles.helpMenuCard, { 
+            backgroundColor: colors.card, 
+            // ✨ DYNAMIC KEYBOARD PUSH
+            paddingBottom: Platform.OS === 'android' && keyboardHeight > 0 ? keyboardHeight + 20 : Math.max(insets.bottom, 24) + 16 
+          }]}>
             <View style={styles.helpHeader}>
               <Text style={[styles.helpTitle, { color: colors.text }]}>Update Email</Text>
               <TouchableOpacity onPress={() => setIsEmailModalVisible(false)}>
@@ -1524,9 +1718,13 @@ export default function Home() {
       </Modal>
 
       {/* ════════════ PHONE UPDATE MODAL ════════════ */}
-      <Modal visible={isPhoneModalVisible} transparent animationType="fade">
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-          <View style={[styles.helpMenuCard, { backgroundColor: colors.card }]}>
+      <Modal visible={isPhoneModalVisible} transparent animationType="fade" onRequestClose={() => setIsPhoneModalVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+          <View style={[styles.helpMenuCard, { 
+            backgroundColor: colors.card, 
+            // ✨ DYNAMIC KEYBOARD PUSH
+            paddingBottom: Platform.OS === 'android' && keyboardHeight > 0 ? keyboardHeight + 20 : Math.max(insets.bottom, 24) + 16 
+          }]}>
             <View style={styles.helpHeader}>
               <Text style={[styles.helpTitle, { color: colors.text }]}>Add Phone Number</Text>
               <TouchableOpacity onPress={() => setIsPhoneModalVisible(false)}>
@@ -1552,7 +1750,7 @@ export default function Home() {
       </Modal>
 
       {/* ════════════ TRUST & SAFETY MODAL ════════════ */}
-      <Modal visible={safetyModalVisible} transparent animationType="slide">
+      <Modal visible={safetyModalVisible} transparent animationType="slide" onRequestClose={() => setSafetyModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.locationModalCard, { backgroundColor: colors.card, alignItems: 'center', paddingVertical: 40 }]}>
             <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#E8F5E9', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
@@ -1598,7 +1796,12 @@ export default function Home() {
       />
 
 {/* ════════════ NOTIFICATIONS MODAL ════════════ */}
-<Modal visible={isNotifModalVisible} transparent animationType="slide">
+      <Modal 
+  visible={isNotifModalVisible} 
+  transparent 
+  animationType="slide" 
+  onRequestClose={() => setIsNotifModalVisible(false)} 
+>
   <View style={styles.modalOverlay}>
     <View style={[styles.locationModalCard, { backgroundColor: colors.card, height: '80%', paddingBottom: insets.bottom + 20 }]}>
       
@@ -1620,14 +1823,35 @@ export default function Home() {
       ) : (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
           {notifications.map(notif => (
-            <TouchableOpacity key={notif.id} style={[styles.notifCard, { borderBottomColor: colors.border }]} activeOpacity={0.7}>
+            <TouchableOpacity 
+              key={notif.id} 
+              style={[styles.notifCard, { borderBottomColor: colors.border }]} 
+              activeOpacity={0.7}
+              onPress={() => handleNotificationPress(notif)} // ✨ Added routing on click
+            >
               <View style={[styles.notifIconWrap, { backgroundColor: notif.color + '20' }]}>
                 <Ionicons name={notif.icon as any} size={24} color={notif.color} />
               </View>
+              
               <View style={styles.notifContent}>
-                <Text style={[styles.notifTitle, { color: colors.text }]}>{notif.title}</Text>
+                {/* ✨ Added a row here to push the X button to the right of the title */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <Text style={[styles.notifTitle, { color: colors.text, flex: 1, marginRight: 8 }]}>{notif.title}</Text>
+                  
+                  {/* ✨ The Delete "X" Button */}
+                  <TouchableOpacity 
+                    onPress={() => deleteNotification(notif.id)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    style={{ padding: 2 }}
+                  >
+                    <Ionicons name="close" size={20} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+
                 <Text style={[styles.notifMsg, { color: colors.textSecondary }]}>{notif.message}</Text>
-                <Text style={[styles.notifTime, { color: colors.textSecondary }]}>{notif.time}</Text>
+                <Text style={[styles.notifTime, { color: colors.textSecondary }]}>
+                  {new Date(notif.created_at).toLocaleDateString()} at {new Date(notif.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </Text>
               </View>
             </TouchableOpacity>
           ))}
@@ -1636,14 +1860,17 @@ export default function Home() {
     </View>
   </View>
 </Modal>
-
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container:        { flex: 1 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 },
+  header: { 
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, 
+    borderBottomWidth: 0, // Removed border
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 8 }}) 
+  },
   headerTitle:      { fontSize: 26, fontWeight: 'bold', letterSpacing: -0.5 },
 
   locationSelectorBar:  { paddingHorizontal: 16, paddingBottom: 10 },
@@ -1652,9 +1879,27 @@ const styles = StyleSheet.create({
 
   searchSection:     { paddingHorizontal: 16, paddingBottom: 10 },
   searchRow:         { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  searchContainer:   { flex: 1, flexDirection: 'row', alignItems: 'center', borderRadius: 12, paddingHorizontal: 15, height: 48 },
+  searchContainer: { 
+    flex: 1, flexDirection: 'row', alignItems: 'center', borderRadius: 12, paddingHorizontal: 15, height: 48, 
+    borderWidth: 0,
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 3, height: 3 }, shadowOpacity: 0.08, shadowRadius: 6 }}) 
+  },
+  filterBtn: { 
+    width: 48, height: 48, borderRadius: 12, justifyContent: 'center', alignItems: 'center', 
+    borderWidth: 0,
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 3, height: 3 }, shadowOpacity: 0.08, shadowRadius: 6 }}) 
+  },
+  categoryCapsule: { 
+    paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20, 
+    borderWidth: 0,
+    ...Platform.select({ default: { elevation: 3, shadowColor: '#000', shadowOffset: { width: 2, height: 2 }, shadowOpacity: 0.08, shadowRadius: 5 }}) 
+  },
+  bottomTabBar: { 
+    flexDirection: 'row', paddingHorizontal: 5, alignItems: 'flex-start', paddingTop: 10, justifyContent: 'space-between',
+    borderTopWidth: 0, // Removed harsh line
+    ...Platform.select({ default: { elevation: 15, shadowColor: '#000', shadowOffset: { width: 0, height: -5 }, shadowOpacity: 0.08, shadowRadius: 12 }}) 
+  },
   searchInput:       { flex: 1, fontSize: 15 },
-  filterBtn:         { width: 48, height: 48, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
   filterBtnActive:   { backgroundColor: '#000', borderColor: '#000' },
   filterBadge:       { position: 'absolute', top: -4, right: -4, backgroundColor: '#007AFF', borderRadius: 9, width: 18, height: 18, justifyContent: 'center', alignItems: 'center', borderWidth: 1.5, borderColor: '#fff' },
   filterBadgeText:   { color: '#fff', fontSize: 10, fontWeight: 'bold' },
@@ -1689,9 +1934,8 @@ const styles = StyleSheet.create({
   voiceCancelBtn:     { paddingHorizontal: 28, paddingVertical: 12, borderRadius: 20 },
   voiceCancelText:    { fontSize: 15, fontWeight: '600' },
 
-  categorySection:         { paddingBottom: 10, paddingTop: 5 },
-  categoryScrollContainer: { paddingHorizontal: 16, gap: 8 },
-  categoryCapsule:         { paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20, borderWidth: 1 },
+  categorySection:         { paddingBottom: 4, paddingTop: 5 },
+  categoryScrollContainer: { paddingHorizontal: 16, gap: 8, paddingBottom: 12, paddingTop: 4 },
   categoryText:            { fontSize: 13, fontWeight: '500' },
 
   activeChipsRow:     { borderBottomWidth: 1 },
@@ -1705,18 +1949,26 @@ const styles = StyleSheet.create({
   scopeFilterNote:    { fontSize: 12, color: '#007AFF', fontWeight: '600' },
 
   listContainer: { padding: 16 },
+  
+  // ✨ The shadow/border is now completely handled by NeumorphicCard!
   card: {
-    borderRadius: 12, marginBottom: 16, overflow: 'hidden', borderWidth: 1,
-    ...Platform.select({ web: { boxShadow: '0px 4px 8px rgba(0,0,0,0.05)' }, default: { elevation: 2 } }),
+    marginBottom: 16, 
+    borderRadius: 20, 
+    overflow: 'hidden',
   },
-  imagePlaceholder: { height: 120 },
-  cardContent:      { padding: 10 },
-  price:            { fontSize: 16, fontWeight: 'bold' },
-  title:            { fontSize: 13, marginBottom: 4 },
-  locationRow:      { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  location:         { fontSize: 11 },
-  conditionBadge:   { alignSelf: 'flex-start', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2, marginBottom: 6 },
-  conditionBadgeText: { fontSize: 11, fontWeight: '600' },
+  
+  imagePlaceholder: { height: 140 }, // Made slightly taller for a premium feel
+  cardContent:      { padding: 14 },
+  
+  // ✨ Premium Typography Applied Here
+  price:            { fontFamily: 'Jakarta-Bold', fontSize: 18, letterSpacing: -0.5 },
+  title:            { fontFamily: 'Jakarta-Medium', fontSize: 14, marginBottom: 8 },
+  
+  locationRow:      { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  location:         { fontFamily: 'Jakarta-Regular', fontSize: 11 },
+  
+  conditionBadge:   { alignSelf: 'flex-start', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, marginBottom: 8 },
+  conditionBadgeText: { fontFamily: 'Jakarta-SemiBold', fontSize: 10, textTransform: 'uppercase' },
 
   emptyState:        { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 80 },
   emptyIconWrapper:  { width: 96, height: 96, borderRadius: 48, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
@@ -1726,7 +1978,6 @@ const styles = StyleSheet.create({
   emptyActionBtn:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, paddingVertical: 10, backgroundColor: '#e8f0fe', borderRadius: 20 },
   emptyActionText:   { color: '#007AFF', fontSize: 14, fontWeight: '600' },
 
-  bottomTabBar:           { flexDirection: 'row', borderTopWidth: 1, paddingHorizontal: 5, alignItems: 'flex-start', paddingTop: 10, justifyContent: 'space-between' },
   tabItem:                { alignItems: 'center', justifyContent: 'center', flex: 1 },
   tabText:                { fontSize: 10, marginTop: 4, fontWeight: '500' },
   tabItemPost:            { alignItems: 'center', justifyContent: 'center', flex: 1, marginTop: -25 },

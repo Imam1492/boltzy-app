@@ -124,7 +124,11 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1 },
   headerTitle: { fontSize: 20, fontWeight: 'bold' },
   listContent: { padding: 16, paddingBottom: 60 },
-  card: { borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1 },
+  card: { 
+    borderRadius: 16, padding: 16, marginBottom: 16, 
+    borderWidth: 0,
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 3, height: 3 }, shadowOpacity: 0.08, shadowRadius: 6 }})
+  },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
   planName: { fontSize: 16, fontWeight: 'bold', flex: 1, paddingRight: 10 },
   amount: { fontSize: 18, fontWeight: 'bold' },

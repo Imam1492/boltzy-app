@@ -20,7 +20,9 @@ import {
   Text, TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
-  View
+  View,
+  StatusBar as RNStatusBar,// ✨ Add this right here!
+  Keyboard // ✨ Add this!
 } from 'react-native';
 import { useLanguage } from '../../context/LanguageContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -90,6 +92,8 @@ export default function ChatRoom() {
   }>();
 
   const insets = useSafeAreaInsets();
+
+  
   
   const actionParam = Array.isArray(rawAction) ? rawAction[0] : rawAction;
   const chatId = Array.isArray(rawChatId) ? rawChatId[0] : rawChatId;
@@ -164,6 +168,28 @@ export default function ChatRoom() {
   const [searchText, setSearchText] = useState('');
   const [searchMatchIdx, setSearchMatchIdx] = useState(0);
   const searchInputRef = useRef<TextInput>(null);
+
+  /// ✨ Change this from a boolean to a number
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      // ✨ Grab the exact pixel height of the keyboard
+      setKeyboardHeight(e.endCoordinates?.height || 0);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      // ✨ Reset to 0 when closed
+      setKeyboardHeight(0);
+    });
+    
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (isOtherUserTyping) {
@@ -855,6 +881,23 @@ export default function ChatRoom() {
     if (data) setMessages(prev => prev.map(m => String(m.id) === String(data.id) ? data : m));
   };
 
+  const handleDeleteExpiredChat = () => {
+    Alert.alert('Delete Chat', 'Remove this expired chat from your inbox?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive', onPress: async () => {
+          const myId = currentUserIdRef.current;
+          if (!myId) return;
+          const existing = chatDetails?.hidden_by || [];
+          if (!existing.includes(myId)) {
+            await supabase.from('chats').update({ hidden_by: [...existing, myId] }).eq('id', chatId);
+          }
+          router.replace('/chats' as any);
+        },
+      },
+    ]);
+  };
+
   const handleMarkSoldClick = () => {
     const title = chatDetails?.listings?.title ?? 'this item';
     const msg = `This will mark "${title}" as sold.\nThe buyer will be prompted to leave you a review.`;
@@ -900,11 +943,15 @@ export default function ChatRoom() {
     setChatDetails((prev: any) => ({ ...prev, review_submitted: true }));
   };
 
-  const renderTicks = (msg: any) => {
+  const renderTicks = (msg: any, isMine: boolean) => {
     if (msg.sender_id !== currentUserIdRef.current) return null;
-    if (msg.is_read || msg.status === 'read')   return <Ionicons name="checkmark-done" size={16} color="#34B7F1" />;
-    if (msg.status === 'delivered')             return <Ionicons name="checkmark-done" size={16} color="#999" />;
-    return <Ionicons name="checkmark" size={16} color="#999" />;
+    // ✨ Adjusts tick colors based on your theme's tint color
+    const tickColor = isMine ? (isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.8)') : '#999';
+    const readColor = isMine ? (isDark ? '#000' : '#fff') : '#34B7F1';
+    
+    if (msg.is_read || msg.status === 'read')   return <Ionicons name="checkmark-done" size={16} color={readColor} />;
+    if (msg.status === 'delivered')             return <Ionicons name="checkmark-done" size={16} color={tickColor} />;
+    return <Ionicons name="checkmark" size={16} color={tickColor} />;
   };
 
   const renderMessage = ({ item }: { item: any }) => {
@@ -957,24 +1004,24 @@ export default function ChatRoom() {
         <View style={[
           styles.msgBubble,
           isMine 
-            ? [styles.myBubble, { backgroundColor: isDark ? '#064e3b' : '#dcf8c6' }] 
-            : [styles.theirBubble, { backgroundColor: colors.card }],
-          isDeleted && [styles.deletedBubble, { backgroundColor: isDark ? '#27272a' : '#f0f0f0' }],
+            ? [styles.myBubble, { backgroundColor: colors.tint }] // ✨ THEME FIX: Uses your app's actual primary tint color!
+            : [styles.theirBubble, { backgroundColor: colors.card }], // ✨ THEME FIX: Uses your app's card color!
+          isDeleted && [styles.deletedBubble, { backgroundColor: colors.backgroundSecondary }],
           isHighlighted && styles.highlightedBubble,
           isSearchHit && styles.searchHitBubble,
           isOffer && !isDeleted && [styles.offerBubble, { backgroundColor: isDark ? '#1e3a8a' : '#e6f2ff' }],
           isImage && !isDeleted && styles.imageBubble,
         ]}>
           {isImage && !isDeleted && (<Image source={{ uri: item.image_url }} style={styles.chatImage} resizeMode="cover" />)}
-          {isOffer && !isDeleted && (<View style={styles.offerHeader}><Ionicons name="pricetag" size={16} color="#007AFF" /><Text style={styles.offerHeaderText}>Offer Made</Text></View>)}
-          {isOffer && !isDeleted && <Text style={[styles.offerAmountText, { color: colors.text }]}>₹{item.offer_amount}</Text>}
+          {isOffer && !isDeleted && (<View style={styles.offerHeader}><Ionicons name="pricetag" size={16} color={isMine ? (isDark ? '#000' : '#fff') : '#007AFF'} /><Text style={[styles.offerHeaderText, { color: isMine ? (isDark ? '#000' : '#fff') : '#007AFF' }]}>Offer Made</Text></View>)}
+          {isOffer && !isDeleted && <Text style={[styles.offerAmountText, { color: isMine ? (isDark ? '#000' : '#fff') : colors.text }]}>₹{item.offer_amount}</Text>}
           
           {isLocation && !isDeleted && (
             <TouchableOpacity style={styles.attachmentBox} onPress={() => { const urlMatch = item.content.match(/https:\/\/www\.google\.com\/maps[^\s]+/); if (urlMatch) Linking.openURL(urlMatch[0]); }}>
-              <View style={[styles.attachmentIconWrap, { backgroundColor: isDark ? '#064e3b' : '#e8f5e9' }]}><Ionicons name="map" size={24} color="#4CAF50" /></View>
+              <View style={[styles.attachmentIconWrap, { backgroundColor: 'rgba(255,255,255,0.2)' }]}><Ionicons name="map" size={24} color={isMine ? (isDark ? '#000' : '#fff') : "#4CAF50"} /></View>
               <View style={{ flexShrink: 1 }}>
-                <Text style={[styles.msgText, isMine ? styles.myText : styles.theirText, { color: colors.text, fontWeight: 'bold' }]} numberOfLines={1}>{messageText.split('\n')[0]}</Text>
-                <Text style={{ color: '#007AFF', fontSize: 12, marginTop: 2 }}>Tap to view on map</Text>
+                <Text style={[styles.msgText, { color: isMine ? (isDark ? '#000' : '#fff') : colors.text, fontWeight: 'bold' }]} numberOfLines={1}>{messageText.split('\n')[0]}</Text>
+                <Text style={{ color: isMine ? 'rgba(255,255,255,0.8)' : '#007AFF', fontSize: 12, marginTop: 2 }}>Tap to view on map</Text>
               </View>
             </TouchableOpacity>
           )}
@@ -992,45 +1039,36 @@ export default function ChatRoom() {
                 parsedName = parsed.name;
                 parsedPhone = parsed.phone;
               }
-            } catch (e) {
-              parsedName = "Shared Contact";
-            }
+            } catch (e) { parsedName = "Shared Contact"; }
 
             return (
               <TouchableOpacity style={styles.attachmentBox} onPress={() => { if (parsedPhone) Linking.openURL(`tel:${parsedPhone.replace(/[^0-9+]/g, '')}`); }}>
-                <View style={[styles.attachmentIconWrap, { backgroundColor: isDark ? '#1e3a8a' : '#e3f2fd' }]}><Ionicons name="person" size={24} color="#2196F3" /></View>
+                <View style={[styles.attachmentIconWrap, { backgroundColor: 'rgba(255,255,255,0.2)' }]}><Ionicons name="person" size={24} color={isMine ? (isDark ? '#000' : '#fff') : "#2196F3"} /></View>
                 <View style={{ flexShrink: 1 }}>
-                  <Text style={[styles.msgText, isMine ? styles.myText : styles.theirText, { color: colors.text, fontWeight: 'bold' }]} numberOfLines={1}>{parsedName}</Text>
-                  <Text style={{ color: '#007AFF', fontSize: 12, marginTop: 2 }}>Tap to call</Text>
+                  <Text style={[styles.msgText, { color: isMine ? (isDark ? '#000' : '#fff') : colors.text, fontWeight: 'bold' }]} numberOfLines={1}>{parsedName}</Text>
+                  <Text style={{ color: isMine ? 'rgba(255,255,255,0.8)' : '#007AFF', fontSize: 12, marginTop: 2 }}>Tap to call</Text>
                 </View>
               </TouchableOpacity>
             );
           })()}
 
           {(!isSpecial || isOffer || isDeleted) && (
-            <Text style={[styles.msgText, isMine ? styles.myText : styles.theirText, { color: colors.text }, isDeleted && styles.deletedText, isOffer && !isDeleted && { fontStyle: 'italic' }]}>
+            <Text style={[
+              styles.msgText, 
+              // ✨ THEME FIX: Ensures the text color contrasts perfectly against your theme colors
+              { color: isDeleted ? colors.textSecondary : (isMine ? (isDark ? '#000' : '#fff') : colors.text) }, 
+              isDeleted && styles.deletedText, 
+              isOffer && !isDeleted && { fontStyle: 'italic' }
+            ]}>
               {isOffer && !isDeleted ? `"${messageText}"` : messageText}
             </Text>
           )}
 
-          {isOffer && !isDeleted && item.offer_status === 'pending' && !isMine && currentUserIdRef.current === chatDetails?.seller_id && (
-            <View style={styles.offerActionRow}>
-              <TouchableOpacity style={styles.acceptBtn} onPress={() => handleOfferAction(item.id, 'accepted')}><Text style={styles.btnTextWhite}>Accept</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.declineBtn} onPress={() => handleOfferAction(item.id, 'declined')}><Text style={styles.btnTextWhite}>Decline</Text></TouchableOpacity>
-            </View>
-          )}
-          
-          {isOffer && !isDeleted && item.offer_status !== 'pending' && (
-            <View style={[styles.offerStatusBadge, item.offer_status === 'accepted' ? styles.bgGreen : styles.bgRed]}>
-              <Text style={styles.btnTextWhite}>{item.offer_status === 'accepted' ? 'Offer Accepted' : 'Offer Declined'}</Text>
-            </View>
-          )}
-
           <View style={[styles.msgFooter, isImage && !isDeleted && styles.imageFooterOverlay]}>
-            {item.is_starred && <Ionicons name="star" size={11} color={isImage && !isDeleted ? '#fff' : colors.textSecondary} style={[isImage && !isDeleted && styles.textShadow, { marginRight: 3 }]} />}
-            {item.is_edited && !isDeleted && (<Text style={[styles.editedText, { color: colors.textSecondary }, isImage && !isDeleted && styles.textShadow]}>(edited)</Text>)}
-            <Text style={[styles.timeText, { color: colors.textSecondary }, isImage && !isDeleted && styles.textShadow]}>{new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
-            {renderTicks(item)}
+            {item.is_starred && <Ionicons name="star" size={11} color={isImage && !isDeleted ? '#fff' : (isMine ? (isDark ? '#000' : '#fff') : colors.textSecondary)} style={[isImage && !isDeleted && styles.textShadow, { marginRight: 3 }]} />}
+            {item.is_edited && !isDeleted && (<Text style={[styles.editedText, { color: isMine ? (isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.8)') : colors.textSecondary }, isImage && !isDeleted && styles.textShadow]}>(edited)</Text>)}
+            <Text style={[styles.timeText, { color: isMine ? (isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.8)') : colors.textSecondary }, isImage && !isDeleted && styles.textShadow]}>{new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
+            {renderTicks(item, isMine)}
           </View>
           {myReaction && (<View style={[styles.reactionBadge, { backgroundColor: colors.card, borderColor: colors.border }]}><Text style={{ fontSize: 12 }}>{myReaction}</Text></View>)}
         </View>
@@ -1043,13 +1081,21 @@ export default function ChatRoom() {
   const displayMessages = showStarredOnly ? messages.filter(m => m.is_starred) : messages;
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90} style={[styles.container, { backgroundColor: isDark ? '#121212' : '#ece5dd' }]}>
-      {isFetchingLocation && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#fff" />
-          <Text style={{ color: '#fff', marginTop: 10, fontWeight: 'bold' }}>Pinpointing exact location...</Text>
-        </View>
-      )}
+   <KeyboardAvoidingView 
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined} 
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0} 
+      style={[
+        styles.container, 
+        { 
+          backgroundColor: isDark ? '#121212' : '#ece5dd',
+          // ✨ FIXED: Added Status Bar height to compensate for the translucent screen shift!
+          paddingBottom: Platform.OS === 'android' && keyboardHeight > 0 
+            ? keyboardHeight + (RNStatusBar.currentHeight || 24) 
+            : 0
+        }
+      ]}
+    >
+      
 
       {/* ═══ HEADER ════════════════════════════════════════ */}
       <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border, paddingTop: insets.top + 10 }]}>
@@ -1167,51 +1213,111 @@ export default function ChatRoom() {
         </View>
       )}
 
-      {/* ═══ INPUT BAR ═════════════════════════════════════ */}
-      <View style={[styles.inputBar, { backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border }]}>
-        <TouchableOpacity onPress={() => setIsAttachMenuVisible(true)} style={styles.attachMenuBtn}><Ionicons name="attach" size={28} color={colors.textSecondary} /></TouchableOpacity>
-        {chatDetails && currentUserIdRef.current !== chatDetails.seller_id && !hasPendingOffer && !hasAcceptedOffer && (
-          <TouchableOpacity onPress={() => { setEditingMsgId(null); setOfferModalVisible(true); setOfferError(''); }} style={styles.offerIconBtn}><Ionicons name="pricetag-outline" size={24} color={colors.textSecondary} /></TouchableOpacity>
-        )}
-        <TextInput style={[styles.input, { backgroundColor: colors.backgroundSecondary, color: colors.text }]} placeholder={editingMsgId ? 'Edit message...' : 'Type a message...'} placeholderTextColor={colors.textSecondary} value={newMessage} onChangeText={handleTyping} multiline />
-        {!newMessage && (
-          <TouchableOpacity onPress={pickImage} style={styles.inlineCameraBtn} disabled={uploadingImage}>
-            {uploadingImage ? <ActivityIndicator size="small" color="#007AFF" /> : <Ionicons name="camera" size={24} color={colors.textSecondary} />}
+     
+      {/* ═══ UPGRADED FLEXBOX INPUT BAR ═════════════════════════════════════ */}
+      {chatDetails?.listings?.expires_at && new Date(chatDetails.listings.expires_at).getTime() < new Date().getTime() ? (
+        
+        <View style={[styles.inputBar, { 
+          backgroundColor: colors.backgroundSecondary, 
+          paddingVertical: 16, 
+          paddingHorizontal: 20, 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          paddingBottom: Math.max(insets.bottom, 16)
+        }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Ionicons name="lock-closed" size={18} color={colors.textSecondary} />
+            <Text style={{ fontSize: 15, fontWeight: '600', color: colors.textSecondary }}>Ad Expired. Chat Closed.</Text>
+          </View>
+          <TouchableOpacity 
+            style={{ backgroundColor: 'rgba(255, 59, 48, 0.1)', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 12 }} 
+            onPress={handleDeleteExpiredChat}
+          >
+            <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#FF3B30' }}>Delete Chat</Text>
           </TouchableOpacity>
-        )}
-        <TouchableOpacity style={[styles.sendBtn, { backgroundColor: colors.tint }, !newMessage.trim() && styles.sendBtnDisabled]} onPress={sendMessage}><Ionicons name={editingMsgId ? 'checkmark' : 'send'} size={18} color={isDark ? '#000' : '#fff'} /></TouchableOpacity>
-      </View>
+        </View>
 
-      {/* ═══ MODAL: ATTACHMENT MENU ═══════════════════════ */}
-      <Modal visible={isAttachMenuVisible} transparent animationType="fade">
+      ) : (
+
+        <View style={[styles.inputBar, { 
+          backgroundColor: colors.card, 
+          borderTopColor: colors.border, 
+          // ✨ Swap to our new keyboardHeight check
+          paddingBottom: keyboardHeight > 0 ? 10 : Math.max(insets.bottom, 10) + 6 
+        }]}>
+          <TouchableOpacity onPress={() => setIsAttachMenuVisible(true)} style={styles.attachMenuBtn}>
+            <Ionicons name="attach" size={28} color={colors.textSecondary} />
+          </TouchableOpacity>
+          
+          {chatDetails && currentUserIdRef.current !== chatDetails.seller_id && !hasPendingOffer && !hasAcceptedOffer && (
+            <TouchableOpacity onPress={() => { setEditingMsgId(null); setOfferModalVisible(true); setOfferError(''); }} style={styles.offerIconBtn}>
+              <Ionicons name="pricetag-outline" size={24} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
+          
+          <View style={[styles.inputContainer, { backgroundColor: colors.backgroundSecondary }]}>
+            <TextInput 
+              style={[styles.input, { color: colors.text }]} 
+              placeholder={editingMsgId ? 'Edit message...' : 'Type a message...'} 
+              placeholderTextColor={colors.textSecondary} 
+              value={newMessage} 
+              onChangeText={handleTyping} 
+              multiline 
+            />
+            {!newMessage && (
+              <TouchableOpacity onPress={pickImage} style={styles.inlineCameraBtn} disabled={uploadingImage}>
+                {uploadingImage ? <ActivityIndicator size="small" color="#007AFF" /> : <Ionicons name="camera" size={22} color={colors.textSecondary} />}
+              </TouchableOpacity>
+            )}
+          </View>
+
+          <TouchableOpacity style={[styles.sendBtn, { backgroundColor: colors.tint }, !newMessage.trim() && styles.sendBtnDisabled]} onPress={sendMessage}>
+            <Ionicons name={editingMsgId ? 'checkmark' : 'send'} size={18} color={isDark ? '#000' : '#fff'} />
+          </TouchableOpacity>
+        </View>
+        
+      )}
+
+      {/* ═══ MODAL: ATTACHMENT MENU (MODERNIZED) ═══════════════════════ */}
+      <Modal 
+        visible={isAttachMenuVisible} 
+        transparent 
+        animationType="slide"
+        onRequestClose={() => setIsAttachMenuVisible(false)} // ✨ THE FIX
+      >
         <TouchableOpacity style={styles.attachOverlay} activeOpacity={1} onPress={() => setIsAttachMenuVisible(false)}>
-          <View style={[styles.attachMenuCard, { backgroundColor: colors.card }]}>
-            <View style={styles.attachRow}>
-              <TouchableOpacity style={styles.attachItem} onPress={captureImage}>
-                <View style={[styles.attachIconCircle, { backgroundColor: '#FF5722' }]}><Ionicons name="camera" size={28} color="#fff" /></View>
-                <Text style={[styles.attachText, { color: colors.text }]}>Camera</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity style={styles.attachItem} onPress={pickImage}>
-                <View style={[styles.attachIconCircle, { backgroundColor: '#BF59CF' }]}><Ionicons name="image" size={28} color="#fff" /></View>
-                <Text style={[styles.attachText, { color: colors.text }]}>Gallery</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity style={styles.attachItem} onPress={sendRealLocation}>
-                <View style={[styles.attachIconCircle, { backgroundColor: '#009688' }]}><Ionicons name="location" size={28} color="#fff" /></View>
-                <Text style={[styles.attachText, { color: colors.text }]}>Location</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity style={styles.attachItem} onPress={openContactPicker}>
-                <View style={[styles.attachIconCircle, { backgroundColor: '#2196F3' }]}><Ionicons name="person" size={28} color="#fff" /></View>
-                <Text style={[styles.attachText, { color: colors.text }]}>Contact</Text>
-              </TouchableOpacity>
-            </View>
+          <View style={[styles.modernAttachSheet, { backgroundColor: colors.card, paddingBottom: Math.max(insets.bottom, 20) + 20 }]}>
+            <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
+            
+            <TouchableOpacity style={[styles.modernAttachRow, { borderBottomColor: colors.border }]} onPress={captureImage}>
+              <View style={[styles.modernAttachIcon, { backgroundColor: 'rgba(0, 122, 255, 0.1)' }]}><Ionicons name="camera-outline" size={24} color="#007AFF" /></View>
+              <Text style={[styles.modernAttachText, { color: colors.text }]}>Take Photo</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={[styles.modernAttachRow, { borderBottomColor: colors.border }]} onPress={pickImage}>
+              <View style={[styles.modernAttachIcon, { backgroundColor: 'rgba(52, 199, 89, 0.1)' }]}><Ionicons name="image-outline" size={24} color="#34C759" /></View>
+              <Text style={[styles.modernAttachText, { color: colors.text }]}>Photo Gallery</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={[styles.modernAttachRow, { borderBottomColor: colors.border }]} onPress={sendRealLocation}>
+              <View style={[styles.modernAttachIcon, { backgroundColor: 'rgba(255, 149, 0, 0.1)' }]}><Ionicons name="location-outline" size={24} color="#FF9500" /></View>
+              <Text style={[styles.modernAttachText, { color: colors.text }]}>Share Location</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={[styles.modernAttachRow, { borderBottomColor: 'transparent' }]} onPress={openContactPicker}>
+              <View style={[styles.modernAttachIcon, { backgroundColor: 'rgba(175, 82, 222, 0.1)' }]}><Ionicons name="person-outline" size={24} color="#AF52DE" /></View>
+              <Text style={[styles.modernAttachText, { color: colors.text }]}>Share Contact</Text>
+            </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
 
-      <Modal visible={isContactPickerVisible} transparent animationType="slide">
+      <Modal 
+        visible={isContactPickerVisible} 
+        transparent 
+        animationType="slide"
+        onRequestClose={() => setIsContactPickerVisible(false)}
+      >
         <View style={styles.contactModalOverlay}>
           <View style={[styles.contactModalCard, { backgroundColor: colors.card }]}>
             <View style={styles.contactHeader}><Text style={[styles.contactTitle, { color: colors.text }]}>Select Contact</Text><TouchableOpacity onPress={() => setIsContactPickerVisible(false)}><Ionicons name="close" size={24} color={colors.text} /></TouchableOpacity></View>
@@ -1224,7 +1330,12 @@ export default function ChatRoom() {
         </View>
       </Modal>
 
-      <Modal visible={offerModalVisible} transparent animationType="slide">
+      <Modal 
+        visible={offerModalVisible} 
+        transparent 
+        animationType="slide"
+        onRequestClose={() => { setOfferModalVisible(false); setEditingMsgId(null); setOfferError(''); }}
+      >
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
           <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
             <Text style={[styles.modalTitle, { color: colors.text }]}>{editingMsgId ? 'Edit Offer' : 'Make an Offer'}</Text>
@@ -1241,7 +1352,12 @@ export default function ChatRoom() {
       </Modal>
 
       {/* ═══ CONTEXT MENU POPOVER ═════════════════════════ */}
-      <Modal visible={isModalVisible} transparent animationType="fade">
+      <Modal 
+        visible={isModalVisible} 
+        transparent 
+        animationType="fade"
+        onRequestClose={() => setModalVisible(false)}
+      >
         <TouchableOpacity style={styles.popoverOverlay} activeOpacity={1} onPress={() => setModalVisible(false)}>
           <View style={[
               styles.popoverMenu, 
@@ -1289,7 +1405,12 @@ export default function ChatRoom() {
         </TouchableOpacity>
       </Modal>
 
-      <Modal visible={ratingVisible} transparent animationType="slide">
+      <Modal 
+        visible={ratingVisible} 
+        transparent 
+        animationType="slide"
+        onRequestClose={() => setRatingVisible(false)}
+      >
         <View style={styles.overlayBottom}>
           <View style={[styles.ratingCard, { backgroundColor: colors.card }]}>
             <View style={[styles.ratingHandle, { backgroundColor: colors.border }]} />
@@ -1311,7 +1432,12 @@ export default function ChatRoom() {
         </View>
       </Modal>
 
-      <Modal visible={pinModalVisible} transparent animationType="fade">
+      <Modal 
+        visible={pinModalVisible} 
+        transparent 
+        animationType="fade"
+        onRequestClose={() => setPinModalVisible(false)}
+      >
         <View style={styles.modalOverlayCenter}>
           <View style={[styles.modalCardCenter, { backgroundColor: colors.card }]}>
             <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 12, textAlign: 'center', color: colors.text }}>Pin Message</Text>
@@ -1361,7 +1487,20 @@ export default function ChatRoom() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   loadingOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 999, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, zIndex: 10 },
+  header: { 
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, zIndex: 10,
+    borderBottomWidth: 0,
+    ...Platform.select({ default: { elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 8 }})
+  },
+  inputBar: { 
+    flexDirection: 'row', paddingHorizontal: 10, paddingTop: 10, alignItems: 'flex-end', 
+    borderTopWidth: 0, 
+    ...Platform.select({ default: { elevation: 15, shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.06, shadowRadius: 8 }}) 
+  },
+  inputContainer: { 
+    flex: 1, flexDirection: 'row', alignItems: 'flex-end', borderRadius: 20, minHeight: 40, maxHeight: 100, marginRight: 8, overflow: 'hidden', 
+    borderWidth: 0 // Faux-inset for typing area
+  },
   headerBack: { paddingRight: 10 },
   headerTitleContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerOnlineDot: { position: 'absolute', bottom: 0, right: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: '#4CAF50', borderWidth: 1.5, borderColor: '#fff' },
@@ -1395,14 +1534,41 @@ const styles = StyleSheet.create({
   msgAvatarImg: { width: 32, height: 32, borderRadius: 16 },
   msgAvatarFallback: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#bbb', justifyContent: 'center', alignItems: 'center' },
   msgAvatarLetter: { fontSize: 13, fontWeight: 'bold', color: '#fff' },
-  msgBubble: { maxWidth: '80%', padding: 10, borderRadius: 12, position: 'relative' },
-  myBubble: { borderBottomRightRadius: 0 },
-  theirBubble: { borderBottomLeftRadius: 0 },
-  deletedBubble: { fontStyle: 'italic' },
+// ✨ NEUMORPHIC SLEEK PILL SHAPE
+  msgBubble: { 
+    maxWidth: '82%', 
+    paddingVertical: 10,     // Slimmer top and bottom (not fat)
+    paddingHorizontal: 16,   // Keeps it wide enough to look like a pill
+    borderRadius: 24,        // Perfect pill shape (not a circle)
+    position: 'relative',
+    // ✨ NEUMORPHIC SHADOWS (Matches your home cards!)
+    ...Platform.select({ 
+      web: { boxShadow: '2px 4px 12px rgba(0,0,0,0.1)' }, 
+      default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 3, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8 }
+    }) 
+  },
+  // ✨ Asymmetrical corners create the classic chat "tail" effect
+  // ✨ Gentle asymmetrical tails to look modern
+  myBubble: { borderBottomRightRadius: 6 }, 
+  theirBubble: { borderBottomLeftRadius: 6 },
+
+  deletedBubble: { fontStyle: 'italic', elevation: 1, shadowOpacity: 0.05 },
   highlightedBubble: { backgroundColor: '#FFD700' },
   searchHitBubble: { borderWidth: 2, borderColor: '#007AFF' },
-  attachmentBox: { flexDirection: 'row', alignItems: 'center', marginVertical: 4, paddingRight: 10 },
-  attachmentIconWrap: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+  
+  attachOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  
+  // ✨ Modern Bottom Sheet Styles
+  modernAttachSheet: { width: '100%', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 24, paddingTop: 12 },
+  sheetHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginBottom: 20 },
+  modernAttachRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, borderBottomWidth: StyleSheet.hairlineWidth },
+  modernAttachIcon: { width: 42, height: 42, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  modernAttachText: { fontSize: 16, fontWeight: '600' },
+ 
+// ✨ Condensed attachment boxes
+  attachmentBox: { flexDirection: 'row', alignItems: 'center', marginVertical: 2, paddingRight: 6 },
+  attachmentIconWrap: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+
   imageBubble: { padding: 4, width: 250 },
   chatImage: { width: '100%', height: 250, borderRadius: 8, backgroundColor: '#e0e0e0' },
   imageFooterOverlay: { position: 'absolute', bottom: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.4)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10 },
@@ -1428,14 +1594,12 @@ const styles = StyleSheet.create({
   soldBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 9, borderTopWidth: 1 },
   soldBannerText: { fontSize: 13, fontWeight: '500' },
   soldBannerLink: { color: '#007AFF', fontWeight: '700' },
-  inputBar: { flexDirection: 'row', padding: 10, alignItems: 'center', paddingBottom: Platform.OS === 'ios' ? 30 : 10 },
-  attachMenuBtn: { marginRight: 8, padding: 4 },
-  offerIconBtn: { marginRight: 8, padding: 4 },
-  input: { flex: 1, borderRadius: 24, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10, fontSize: 16, maxHeight: 100, marginRight: 8 },
-  inlineCameraBtn: { position: 'absolute', right: 65, padding: 8, top: 12 },
-  sendBtn: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  attachMenuBtn: { padding: 6, marginBottom: 2 },
+  offerIconBtn: { padding: 6, marginBottom: 2 },
+  input: { flex: 1, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 10, fontSize: 16 },
+  inlineCameraBtn: { padding: 10, paddingBottom: 10, justifyContent: 'center', alignItems: 'center' },
+  sendBtn: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginBottom: 2 },
   sendBtnDisabled: { backgroundColor: '#999' },
-  attachOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'transparent' },
   attachMenuCard: { margin: 16, marginBottom: 80, borderRadius: 16, padding: 20, ...Platform.select({ web: { boxShadow: '0px 4px 12px rgba(0,0,0,0.15)' }, default: { elevation: 5 } }) },
   attachRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 15 },
   attachItem: { alignItems: 'center', width: 80 },

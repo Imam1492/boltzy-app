@@ -10,8 +10,7 @@ import { supabase } from '../supabase';
 import { getCurrentUser } from '../utils/auth';
 import { Skeleton } from '../components/ShimmerSkeleton';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-
+import ChangePasswordModal from '../components/ChangePasswordModal';
 
 const LANGUAGE_OPTIONS = [
   { id: 'en', nativeLabel: 'English' },
@@ -39,15 +38,20 @@ const getInitials = (name?: string) => {
 export default function EditProfile() {
   const router = useRouter();
   const { lang, setLang, t } = useLanguage();
-  const { colors, isDark, toggleTheme } = useTheme();
+  const { colors, isDark, themeMode, setThemeMode } = useTheme();
 
   const insets = useSafeAreaInsets();
+  
+  // ✨ State for the Password Modal
+  const [email, setEmail] = useState('');
+  const [userId, setUserId] = useState('');
   
   const [displayName, setDisplayName] = useState('');
   const [realName, setRealName] = useState('');
   const [username, setUsername] = useState('');
   const [initialUsername, setInitialUsername] = useState('');
   const [lastUsernameChange, setLastUsernameChange] = useState<string | null>(null);
+  const [isPasswordModalVisible, setIsPasswordModalVisible] = useState(false);
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -69,12 +73,20 @@ export default function EditProfile() {
     setLoading(true);
     const user = await getCurrentUser();
     if (!user) return;
+
+    // ✨ Grab the email & id to pass into our Modal!
+    if (user.email) setEmail(user.email);
+    if (user.id) setUserId(user.id);
+
     const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
     if (data) {
+      // ✨ Grab the username from either column, just like the Home modal does
+      const fetchedUsername = data.username || data.display_name || '';
+      
       setDisplayName(data.display_name || '');
       setRealName(data.real_name || '');
-      setUsername(data.username || '');
-      setInitialUsername(data.username || '');
+      setUsername(fetchedUsername);
+      setInitialUsername(fetchedUsername);
       setLastUsernameChange(data.last_username_change || null);
       setIsAdmin(data.is_admin === true);
     }
@@ -119,6 +131,13 @@ export default function EditProfile() {
 
     const cleanUsername = username.trim().toLowerCase().replace(/[^a-z0-9_.]/g, '');
     
+    // ✨ ADDED MIN LENGTH CHECK HERE
+    if (cleanUsername.length < 3) {
+      setSaving(false);
+      Toast.show({ type: 'error', text1: 'Invalid Username', text2: 'Username must be at least 3 characters long without spaces.', position: 'top' });
+      return;
+    }
+
     let updates: any = { display_name: realName, real_name: realName };
 
     if (cleanUsername !== initialUsername) {
@@ -242,37 +261,58 @@ export default function EditProfile() {
             ))}
           </View>
 
-          {/* ✨ NEW THEME SWITCHER ✨ */}
+          {/* ✨ THEME SWITCHER (System / Light / Dark) ✨ */}
           <Text style={[styles.label, { color: colors.text, marginTop: 24 }]}>App Theme</Text>
           <View style={styles.languageContainer}>
             <TouchableOpacity
               style={[
                 styles.languageChip,
                 { backgroundColor: colors.card, borderColor: colors.border },
-                !isDark && { backgroundColor: colors.tint, borderColor: colors.tint }
+                themeMode === 'system' && { backgroundColor: colors.tint, borderColor: colors.tint }
               ]}
-              onPress={() => isDark && toggleTheme()}
+              onPress={() => setThemeMode('system')}
             >
               <Text style={[
                 styles.languageText,
                 { color: colors.text },
-                !isDark && { color: '#fff', fontWeight: 'bold' }
-              ]}>Light</Text>
+                themeMode === 'system' && { color: isDark ? '#000' : '#fff', fontWeight: 'bold' }
+              ]}>
+                System
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={[
                 styles.languageChip,
                 { backgroundColor: colors.card, borderColor: colors.border },
-                isDark && { backgroundColor: colors.tint, borderColor: colors.tint }
+                themeMode === 'light' && { backgroundColor: colors.tint, borderColor: colors.tint }
               ]}
-              onPress={() => !isDark && toggleTheme()}
+              onPress={() => setThemeMode('light')}
             >
               <Text style={[
                 styles.languageText,
                 { color: colors.text },
-                isDark && { color: '#000', fontWeight: 'bold' }
-              ]}>Dark</Text>
+                themeMode === 'light' && { color: isDark ? '#000' : '#fff', fontWeight: 'bold' }
+              ]}>
+                Light
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.languageChip,
+                { backgroundColor: colors.card, borderColor: colors.border },
+                themeMode === 'dark' && { backgroundColor: colors.tint, borderColor: colors.tint }
+              ]}
+              onPress={() => setThemeMode('dark')}
+            >
+              <Text style={[
+                styles.languageText,
+                { color: colors.text },
+                themeMode === 'dark' && { color: isDark ? '#000' : '#fff', fontWeight: 'bold' }
+              ]}>
+                Dark
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -291,7 +331,11 @@ export default function EditProfile() {
         <TextInput 
           style={[styles.input, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border, color: colors.text }]} 
           value={username} 
-          onChangeText={setUsername} 
+          onChangeText={(text) => {
+            // ✨ Instantly strip spaces, uppercase, and invalid characters while they type!
+            const formatted = text.toLowerCase().replace(/[^a-z0-9_.]/g, '');
+            setUsername(formatted);
+          }} 
           autoCapitalize="none"
           autoCorrect={false}
         />
@@ -299,6 +343,15 @@ export default function EditProfile() {
         <TouchableOpacity style={[styles.saveButton, { backgroundColor: colors.tint }]} onPress={handleSave} disabled={saving}>
           {saving ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.saveButtonText, { color: isDark ? '#000' : '#fff' }]}>{t('save_btn') || 'Save Changes'}</Text>}
         </TouchableOpacity>
+
+        {/* ✨ Wrapped in a bordered section for a cleaner UI ✨ */}
+        <View style={{ marginTop: 32, borderTopWidth: 1, borderBottomWidth: 1, borderColor: 'rgba(150,150,150,0.2)' }}>
+          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 16 }} onPress={() => setIsPasswordModalVisible(true)}>
+            <Ionicons name="lock-closed-outline" size={22} color={colors.text} style={{ marginRight: 12 }} />
+            <Text style={{ fontSize: 16, color: colors.text, flex: 1 }}>Change Password</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
 
         {isAdmin && (
           <View style={[styles.adminZone, { borderTopColor: colors.border }]}>
@@ -341,6 +394,13 @@ export default function EditProfile() {
             <Ionicons color="#FF3B30" name="trash-outline" size={20}/>
             <Text style={styles.dangerBtnText}>{t('delete_acc') || 'Delete Account'}</Text>
           </TouchableOpacity>
+
+          <ChangePasswordModal 
+            visible={isPasswordModalVisible} 
+            onClose={() => setIsPasswordModalVisible(false)} 
+            userEmail={email} 
+            userId={userId} 
+          />
         </View>
       </ScrollView>
 
@@ -365,16 +425,29 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: 'bold' },
   content: { padding: 24 },
   avatarContainer: { alignSelf: 'center', marginBottom: 20 },
-  avatarCircle: { width: 100, height: 100, borderRadius: 50, backgroundColor: '#F5A623', justifyContent: 'center', alignItems: 'center', overflow: 'hidden', borderWidth: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },
+  avatarCircle: { 
+    width: 100, height: 100, borderRadius: 50, backgroundColor: '#F5A623', justifyContent: 'center', alignItems: 'center', overflow: 'hidden', 
+    borderWidth: 0, 
+    ...Platform.select({ default: { elevation: 6, shadowColor: '#000', shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8 } }) 
+  },
+  highlightBox: { 
+    padding: 16, borderRadius: 16, marginBottom: 20, borderWidth: 0, 
+    ...Platform.select({ default: { elevation: 3, shadowColor: '#000', shadowOffset: { width: 2, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6 } }) 
+  },
+  languageChip: { 
+    paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, borderWidth: 0, 
+    ...Platform.select({ default: { elevation: 3, shadowColor: '#000', shadowOffset: { width: 2, height: 2 }, shadowOpacity: 0.08, shadowRadius: 5 } }) 
+  },
+  input: { height: 56, borderWidth: 0, borderRadius: 12, paddingHorizontal: 16, fontSize: 16, marginBottom: 15 },
+  saveButton: { 
+    height: 56, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginTop: 10, 
+    ...Platform.select({ default: { elevation: 5, shadowColor: '#000', shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8 } }) 
+  },
   avatarText: { color: '#fff', fontSize: 36, fontWeight: 'bold', letterSpacing: 2 },
-  highlightBox: { padding: 16, borderRadius: 16, marginBottom: 20, borderWidth: 1 },
   languageContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
-  languageChip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, borderWidth: 1 },
   languageText: { fontSize: 14 },
   label: { fontSize: 14, fontWeight: '700', marginBottom: 6, marginTop: 10 },
   hintText: { fontSize: 11, marginBottom: 8, fontStyle: 'italic' },
-  input: { height: 56, borderWidth: 1, borderRadius: 12, paddingHorizontal: 16, fontSize: 16, marginBottom: 15 },
-  saveButton: { height: 56, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginTop: 10 },
   saveButtonText: { fontSize: 18, fontWeight: 'bold' },
   adminZone: { marginTop: 30, paddingTop: 20, borderTopWidth: 1 },
   adminTitle: { fontSize: 14, fontWeight: '700', color: '#007AFF', marginBottom: 12, textTransform: 'uppercase' },

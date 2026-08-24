@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, FlatList, Image, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { Alert, Animated, FlatList, Image, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View,Platform } from 'react-native';
 import { useLanguage } from '../context/LanguageContext';
 import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../supabase';
@@ -150,10 +150,17 @@ export default function SavedItems() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 60, borderBottomWidth: 1 },
+ header: { 
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 60, 
+    borderBottomWidth: 0, 
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 8 } }) 
+  },
+  card: { 
+    borderRadius: 12, marginBottom: 16, overflow: 'hidden', borderWidth: 0, flexDirection: 'row', 
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 3, height: 3 }, shadowOpacity: 0.08, shadowRadius: 6 } }) 
+  },
   headerTitle: { fontSize: 20, fontWeight: 'bold' },
   listContainer: { padding: 16 },
-  card: { borderRadius: 12, marginBottom: 16, overflow: 'hidden', borderWidth: 1, flexDirection: 'row' },
   cardGrid: { flexDirection: 'column', flex: 1, maxWidth: '48%', marginBottom: 12 },
   image: { width: 120, height: 120 },
   imageGrid: { width: '100%', height: 140 },

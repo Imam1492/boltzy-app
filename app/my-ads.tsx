@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, FlatList, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Alert, FlatList, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Toast from 'react-native-toast-message';
 import { useLanguage } from '../context/LanguageContext';
 import { useTheme } from '../context/ThemeContext';
@@ -13,13 +13,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 export default function MyAds() {
   const router = useRouter();
   const { lang, t, translateUGC } = useLanguage();
-  const { colors, isDark, toggleTheme } = useTheme(); 
+  const { colors, isDark } = useTheme(); 
   const insets = useSafeAreaInsets();
 
   const [myListings, setMyListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [goldTokens, setGoldTokens] = useState(0); // ✨ Added Gold Tokens State
   
-  // ✨ Tab state updated to Active, Pending, Inactive
   const [activeTab, setActiveTab] = useState<'Active' | 'Pending' | 'Inactive'>('Active');
 
   useEffect(() => {
@@ -31,12 +31,17 @@ export default function MyAds() {
     const user = await getCurrentUser();
     if (!user) return;
 
+    // ✨ Fetch their token balance securely
+    const { data: profile } = await supabase.from('profiles').select('gold_tokens').eq('id', user.id).single();
+    if (profile) setGoldTokens(profile.gold_tokens || 0);
+
+    // ✨ Cleaned up the duplicate/broken fetch block
     const { data, error } = await supabase
       .from('listings')
       .select('*, chats(count)')
       .eq('seller_id', user.id)
       .order('created_at', { ascending: false });
-
+      
     if (!error) setMyListings(data || []);
     setLoading(false);
   };
@@ -50,7 +55,7 @@ export default function MyAds() {
   });
 
   const pendingAds = myListings.filter(i => {
-    return ['pending', 'action_required'].includes(i.approval_status) && !i.is_sold;
+    return ['pending', 'action_required', 'rejected'].includes(i.approval_status) && !i.is_sold;
   });
 
   const inactiveAds = myListings.filter(i => {
@@ -62,6 +67,58 @@ export default function MyAds() {
     if (activeTab === 'Active') return activeAds;
     if (activeTab === 'Pending') return pendingAds;
     return inactiveAds;
+  };
+
+  // ✨ NEW: Handle Free Gold Token Redemption
+  const redeemGoldToken = async (item: any) => {
+    if (Platform.OS === 'web') {
+      if (window.confirm("Use 1 Gold Token to promote this ad for 7 days?")) {
+        executeRedeemToken(item);
+      }
+    } else {
+      Alert.alert(
+        "Use Gold Token",
+        "Redeem 1 Gold Token to promote this ad for 7 days?",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Redeem", onPress: () => executeRedeemToken(item) }
+        ]
+      );
+    }
+  };
+
+  const executeRedeemToken = async (item: any) => {
+    setLoading(true);
+    try {
+      const user = await getCurrentUser();
+      if (!user) throw new Error("You must be logged in.");
+
+      const oneWeekFromNow = new Date();
+      oneWeekFromNow.setDate(oneWeekFromNow.getDate() + 7);
+
+      // 1. Upgrade the Ad
+      const { error: adError } = await supabase.from('listings').update({
+        is_premium: true,
+        premium_until: oneWeekFromNow.toISOString()
+      }).eq('id', item.id);
+      
+      if (adError) throw adError;
+
+      // 2. Deduct the Token
+      const { error: profileError } = await supabase.from('profiles').update({
+        gold_tokens: goldTokens - 1
+      }).eq('id', user.id);
+
+      if (profileError) throw profileError;
+
+      Toast.show({ type: 'success', text1: 'Token Redeemed! 🏆', text2: 'Your ad is now Promoted for 7 days.', position: 'top' });
+      fetchMyListings();
+
+    } catch (error: any) {
+      Toast.show({ type: 'error', text1: 'Redemption Failed', text2: error.message, position: 'top' });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handlePromoteAd = (item: any) => {
@@ -87,6 +144,7 @@ export default function MyAds() {
       const user = await getCurrentUser();
       if (!user) throw new Error("You must be logged in to promote an ad.");
 
+      // 1. Generate Secure Order from Supabase
       const { data: orderData, error: orderError } = await supabase.functions.invoke('create-razorpay-order', {
         body: { plan_type: 'single_ad', user_id: user.id, listing_id: item.id }
       });
@@ -94,13 +152,54 @@ export default function MyAds() {
       if (orderError) throw orderError;
       if (!orderData || !orderData.order_id) throw new Error("Could not generate secure order from server.");
 
-      let paymentData: any = {
-        razorpay_order_id: orderData.order_id,
-        razorpay_payment_id: `pay_sim_${Math.floor(Math.random() * 10000)}`,
-        razorpay_signature: 'simulated_signature'
-      };
+      let paymentData: any = null;
 
-      if (Platform.OS !== 'web') {
+      // 2. Open the appropriate checkout gateway based on the platform
+      if (Platform.OS === 'web') {
+        
+        // ✨ THE WEB FIX: Dynamically inject the Razorpay SDK into the browser
+        const loadRazorpay = () => new Promise((resolve) => {
+          if (document.getElementById('razorpay-sdk')) return resolve(true);
+          const script = document.createElement('script');
+          script.id = 'razorpay-sdk';
+          script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+          script.onload = () => resolve(true);
+          script.onerror = () => resolve(false);
+          document.body.appendChild(script);
+        });
+
+        const isLoaded = await loadRazorpay();
+        if (!isLoaded) throw new Error("Failed to load payment gateway. Please check your internet connection.");
+
+        // Pause execution until the web payment completes or is dismissed
+        paymentData = await new Promise((resolve, reject) => {
+          const options = {
+            key: process.env.EXPO_PUBLIC_RAZORPAY_KEY_ID || '', 
+            amount: orderData.amount,         
+            order_id: orderData.order_id,     
+            name: 'Boltzy',
+            description: `Promote "${item.title}" for 1 Month`,
+            image: 'https://boltzy.in/icon.png', 
+            theme: { color: '#F5A623' }, // Matches your premium gold color
+            handler: function (response: any) {
+              resolve({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature
+              });
+            },
+            modal: {
+              ondismiss: function () {
+                reject(new Error("Payment cancelled."));
+              }
+            }
+          };
+          const rzp = new (window as any).Razorpay(options);
+          rzp.open();
+        });
+
+      } else {
+        // ✨ Native Mobile Checkout (Unchanged)
         const RazorpayCheckout = require('react-native-razorpay').default;
         const options = {
           description: `Promote "${item.title}" for 1 Month`,
@@ -115,6 +214,9 @@ export default function MyAds() {
         paymentData = await RazorpayCheckout.open(options);
       }
 
+      setLoading(true); // Re-trigger loading spinner while backend verifies
+
+      // 3. Verify Payment securely on the backend
       const { error: funcError } = await supabase.functions.invoke('verify-razorpay-payment', {
         body: {
           razorpay_order_id: paymentData.razorpay_order_id,
@@ -229,7 +331,7 @@ export default function MyAds() {
               
               <View style={[styles.statusBadge, isPending && {backgroundColor: isDark ? '#422006' : '#FFFBEB'}, isRejected && {backgroundColor: isDark ? '#450a0a' : '#FEF2F2'}, (isDraft || isExpired || item.is_sold) && {backgroundColor: colors.backgroundSecondary}]}>
                 <Text style={[styles.statusText, isPending && {color: isDark ? '#fde047' : '#D97706'}, isRejected && {color: '#FF3B30'}, (isDraft || isExpired || item.is_sold) && {color: colors.textSecondary}]}>
-                  {item.is_sold ? 'Sold' : isExpired ? 'Expired' : isDraft ? 'Draft' : isPending ? 'Pending' : isRejected ? 'Action Required' : 'Active'}
+                  {item.is_sold ? 'Sold' : isExpired ? 'Expired' : isDraft ? 'Draft' : isPending ? 'Pending' : item.approval_status === 'rejected' ? 'Rejected' : item.approval_status === 'action_required' ? 'Action Required' : 'Active'}
                 </Text>
               </View>
             </View>
@@ -255,11 +357,17 @@ export default function MyAds() {
         )}
 
         {isApproved && !item.is_premium && !item.is_sold && !isExpired && (
-          <TouchableOpacity style={[styles.promoteBanner, { backgroundColor: isDark ? '#3d2e00' : '#FFFDF5', borderTopColor: colors.border }]} onPress={() => handlePromoteAd(item)}>
+          <TouchableOpacity 
+            style={[styles.promoteBanner, { backgroundColor: isDark ? '#3d2e00' : '#FFFDF5', borderTopColor: colors.border }]} 
+            onPress={() => goldTokens > 0 ? redeemGoldToken(item) : handlePromoteAd(item)}
+          >
             <Ionicons name="star" size={16} color="#F5A623" />
-            <Text style={styles.promoteBannerText}>Promote Ad to Top (₹249)</Text>
+            <Text style={styles.promoteBannerText}>
+              {goldTokens > 0 ? `Use Free Gold Token (${goldTokens} Left)` : 'Promote Ad to Top (₹249)'}
+            </Text>
           </TouchableOpacity>
         )}
+        
         {isApproved && item.is_premium && !item.is_sold && !isExpired && (
           <View style={styles.promotedBadge}>
             <Ionicons name="checkmark-circle" size={16} color="#fff" />
@@ -292,7 +400,6 @@ export default function MyAds() {
         <View style={{ width: 28 }} />
       </View>
 
-      {/* ✨ REWRITTEN TABS: Active | Pending | Inactive */}
       <View style={[styles.tabContainer, { backgroundColor: colors.backgroundSecondary }]}>
         <TouchableOpacity style={[styles.tab, activeTab === 'Active' && [styles.tabActive, { backgroundColor: colors.card }]]} onPress={() => setActiveTab('Active')}>
           <Text style={[styles.tabText, { color: colors.textSecondary }, activeTab === 'Active' && [styles.tabTextActive, { color: colors.text }]]}>Active ({activeAds.length})</Text>
@@ -361,12 +468,20 @@ const styles = StyleSheet.create({
   
   tabContainer: { flexDirection: 'row', marginHorizontal: 16, marginTop: 10, borderRadius: 12, padding: 4 },
   tab: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
-  tabActive: { elevation: 2, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4 },
+  tabActive: { 
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 2, height: 2 }, shadowOpacity: 0.1, shadowRadius: 5 } }) 
+  },
+  card: { 
+    borderRadius: 16, marginBottom: 16, overflow: 'hidden', 
+    borderWidth: 0, // Neumorphic Outer Shadow
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.08, shadowRadius: 8 } }) 
+  },
+  actionRow: { flexDirection: 'row', borderTopWidth: 0 }, // Smooth blended buttons
+  borderLeft: { borderLeftWidth: 0 },
   tabText: { fontSize: 14, fontWeight: '600' },
   tabTextActive: {},
 
   listContainer: { padding: 16 },
-  card: { borderRadius: 16, marginBottom: 16, overflow: 'hidden', borderWidth: 1, elevation: 1 },
   cardMain: { flexDirection: 'row', padding: 16 },
   image: { width: 90, height: 90, borderRadius: 12 },
   details: { flex: 1, marginLeft: 16, justifyContent: 'space-between' },
@@ -385,9 +500,7 @@ const styles = StyleSheet.create({
   promotedBadge: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, backgroundColor: '#F5A623', paddingVertical: 8 },
   promotedBadgeText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
 
-  actionRow: { flexDirection: 'row', borderTopWidth: 1 },
   actionBtn: { flex: 1, paddingVertical: 14, alignItems: 'center' },
-  borderLeft: { borderLeftWidth: 1 },
   actionBtnText: { fontSize: 14, fontWeight: '600' },
 
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },

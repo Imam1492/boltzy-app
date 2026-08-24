@@ -1,91 +1,106 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Toast from 'react-native-toast-message';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../supabase';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
- const { colors, isDark, toggleTheme } = useTheme(); // ✨ Ensure toggleTheme is here
+  const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
+  
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const isStrongPassword = (pass: string) => {
+    const hasUpper = /[A-Z]/.test(pass);
+    const hasLower = /[a-z]/.test(pass);
+    const hasNumber = /[0-9]/.test(pass);
+    const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(pass);
+    return pass.length >= 8 && hasUpper && hasLower && hasNumber && hasSpecial;
+  };
 
   const handleUpdatePassword = async () => {
-    if (password.length < 8) {
-      Toast.show({ type: 'error', text1: 'Weak Password', text2: 'Password must be at least 8 characters long.', position: 'top' });
+    if (!isStrongPassword(password)) {
+      Toast.show({ type: 'error', text1: 'Weak Password', text2: 'Must be 8+ characters with uppercase, lowercase, number, and symbol.', position: 'top' });
       return;
     }
 
     setLoading(true);
-    const { error } = await supabase.auth.updateUser({ password });
-    setLoading(false);
-
-    if (error) {
-      Toast.show({ type: 'error', text1: 'Update Failed', text2: error.message, position: 'top' });
-    } else {
-      Toast.show({ type: 'success', text1: 'Success', text2: 'Password updated successfully!', position: 'top' });
-      router.replace('/home');
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+      
+      Toast.show({ type: 'success', text1: 'Success!', text2: 'Your password has been updated.', position: 'top' });
+      router.replace('/');
+    } catch (e: any) {
+      Toast.show({ type: 'error', text1: 'Error', text2: e.message, position: 'top' });
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={styles.inner}>
-        <Text style={[styles.logo, { color: colors.text }]}>Boltzy</Text>
-        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Create a new password</Text>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <KeyboardAvoidingView 
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView 
+          contentContainerStyle={[styles.inner, { paddingTop: insets.top, paddingBottom: insets.bottom }]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={[styles.logo, { color: colors.text }]}>Boltzy</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Create a new password</Text>
 
-        <View style={styles.form}>
-          <View style={[styles.passwordContainer, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
-            <TextInput
-              style={[styles.passwordInput, { color: colors.text }]}
-              placeholder="New Password"
-              placeholderTextColor={colors.textSecondary}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry={!showPassword}
-              autoCapitalize="none"
-              autoFocus
-            />
-            <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
-              <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={22} color={colors.textSecondary} />
+          <View style={styles.form}>
+            <View style={[styles.passwordContainer, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
+              <TextInput
+                style={[styles.passwordInput, { color: colors.text }]}
+                placeholder="New Password"
+                placeholderTextColor={colors.textSecondary}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+              />
+              <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
+                <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={22} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 24, paddingHorizontal: 4, lineHeight: 18 }}>
+              Password must contain 8+ characters, including an uppercase letter, lowercase letter, number, and special character.
+            </Text>
+
+            <TouchableOpacity style={[styles.button, { backgroundColor: colors.tint }]} onPress={handleUpdatePassword} disabled={loading}>
+              {loading ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.buttonText, { color: isDark ? '#000' : '#fff' }]}>Update Password</Text>}
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.backButton} onPress={() => router.replace('/')}>
+              <Text style={[styles.linkText, { color: colors.textSecondary }]}>Back to Login</Text>
             </TouchableOpacity>
           </View>
-
-          <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 24, paddingHorizontal: 4 }}>
-            Password must contain 8+ characters, including an uppercase letter, lowercase letter, number, and special character.
-          </Text>
-
-          <TouchableOpacity style={[styles.button, { backgroundColor: colors.tint }]} onPress={handleUpdatePassword} disabled={loading}>
-            {loading ? <ActivityIndicator color={isDark ? '#000' : '#fff'} /> : <Text style={[styles.buttonText, { color: isDark ? '#000' : '#fff' }]}>Update Password</Text>}
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={() => router.replace('/')} style={styles.backButton}>
-            <Text style={[styles.linkText, { color: colors.textSecondary }]}>Back to Login</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </KeyboardAvoidingView>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  inner: { flex: 1, justifyContent: 'center', padding: 24, maxWidth: 500, alignSelf: 'center', width: '100%' },
-  logo: { fontSize: 48, fontWeight: 'bold', marginBottom: 8, letterSpacing: -1 },
-  subtitle: { fontSize: 16, marginBottom: 32 },
+  inner: { flexGrow: 1, justifyContent: 'center', padding: 24, maxWidth: 500, alignSelf: 'center', width: '100%' },
+  logo: { fontSize: 40, fontWeight: 'bold', marginBottom: 8, letterSpacing: -1, marginTop: 10 },
+  subtitle: { fontSize: 16, marginBottom: 32, lineHeight: 24 },
   form: { width: '100%' },
-  passwordContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 60,
-    borderWidth: 1.5,
-    borderRadius: 16,
-    marginBottom: 8,
+  
+  passwordContainer: { 
+    flexDirection: 'row', alignItems: 'center', height: 60, borderWidth: 0, borderRadius: 16, marginBottom: 12 
   },
   passwordInput: {
     flex: 1,
@@ -98,6 +113,7 @@ const styles = StyleSheet.create({
     height: '100%',
     justifyContent: 'center',
   },
+
   button: { 
     height: 60, 
     borderRadius: 16, 
@@ -109,6 +125,7 @@ const styles = StyleSheet.create({
     })
   },
   buttonText: { fontSize: 18, fontWeight: 'bold' },
-  backButton: { marginTop: 20, alignItems: 'center', paddingVertical: 10 },
+  
+  backButton: { marginTop: 24, alignItems: 'center', paddingVertical: 10 },
   linkText: { fontSize: 15, fontWeight: '500' },
 });

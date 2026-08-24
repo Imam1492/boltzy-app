@@ -42,7 +42,11 @@ export default function TermsOfService() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 20, borderBottomWidth: 1 },
+  header: { 
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: Platform.OS === 'ios' ? 60 : 20, 
+    borderBottomWidth: 0, 
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 8 } }) 
+  },
   headerTitle: { fontSize: 18, fontWeight: 'bold' },
   content: { flexGrow: 1, padding: 24, paddingBottom: 60, maxWidth: 800, alignSelf: 'center', width: '100%' },
   date: { fontSize: 14, marginBottom: 24, fontStyle: 'italic' },

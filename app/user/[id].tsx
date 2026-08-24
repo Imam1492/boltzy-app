@@ -498,30 +498,46 @@ const s = StyleSheet.create({
     alignSelf: 'stretch', marginBottom: 20,
   },
   navBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    justifyContent: 'center', alignItems: 'center',
+    width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 0, // Removed border
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 3, height: 3 }, shadowOpacity: 0.1, shadowRadius: 5 } })
   },
 
   avatarWrap:       { position: 'relative', marginBottom: 14 },
-  avatarImg:        { width: 100, height: 100, borderRadius: 50, borderWidth: 3 },
-  avatarFallback:   { width: 100, height: 100, borderRadius: 50, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', borderWidth: 3 },
+  avatarImg: { 
+    width: 100, height: 100, borderRadius: 50, 
+    borderWidth: 0, // Removed harsh border
+    ...Platform.select({ default: { elevation: 6, shadowColor: '#000', shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8 } })
+  },
+  avatarFallback: { 
+    width: 100, height: 100, borderRadius: 50, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center', 
+    borderWidth: 0,
+    ...Platform.select({ default: { elevation: 6, shadowColor: '#000', shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8 } })
+  },
   avatarLetter:     { color: '#fff', fontSize: 40, fontWeight: 'bold' },
   verifiedBadge: {
-    position: 'absolute', bottom: 2, right: 2,
-    width: 26, height: 26, borderRadius: 13,
-    backgroundColor: '#007AFF', justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2, borderColor: '#fff',
+    position: 'absolute', bottom: 2, right: 2, width: 26, height: 26, borderRadius: 13, backgroundColor: '#007AFF', justifyContent: 'center', alignItems: 'center',
+    borderWidth: 0, // Removed border
+    ...Platform.select({ default: { elevation: 3, shadowColor: '#000', shadowOffset: { width: 1, height: 1 }, shadowOpacity: 0.2, shadowRadius: 3 } })
   },
 
   profileName:      { fontSize: 24, fontWeight: 'bold', marginBottom: 4 },
   profileUsername:  { fontSize: 15, marginBottom: 12 },
 
-  ratingPill:       { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, marginBottom: 20, borderWidth: 1 },
+  ratingPill: { 
+    flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, marginBottom: 20, 
+    borderWidth: 0, // Neumorphic Outer Shadow
+    ...Platform.select({ default: { elevation: 3, shadowColor: '#000', shadowOffset: { width: 2, height: 2 }, shadowOpacity: 0.08, shadowRadius: 5 } })
+  },
+  
   ratingPillText:   { fontSize: 14, fontWeight: '700', color: '#F9A825' },
   newSellerPill:    { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, marginBottom: 20 },
   newSellerText:    { fontSize: 14, fontWeight: '500' },
 
-  statsRow:         { flexDirection: 'row', alignItems: 'center', borderRadius: 16, padding: 16, width: '100%', marginBottom: 20, borderWidth: 1 },
+  statsRow: { 
+    flexDirection: 'row', alignItems: 'center', borderRadius: 16, padding: 16, width: '100%', marginBottom: 20, 
+    borderWidth: 0 // Faux-inset
+  },
   statBox:          { flex: 1, alignItems: 'center' },
   statNum:          { fontSize: 20, fontWeight: 'bold' },
   statLabel:        { fontSize: 11, marginTop: 2, fontWeight: '500' },
@@ -529,20 +545,21 @@ const s = StyleSheet.create({
 
   ctaRow:           { flexDirection: 'row', gap: 12, width: '100%' },
   ctaChat: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingVertical: 14, borderRadius: 14,
-    borderWidth: 1,
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 14, 
+    borderWidth: 0,
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 3, height: 3 }, shadowOpacity: 0.08, shadowRadius: 6 } })
   },
   ctaChatText:      { fontSize: 15, fontWeight: '700' },
   ctaCall: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingVertical: 14, borderRadius: 14,
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 14, 
+    borderWidth: 0,
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 3, height: 3 }, shadowOpacity: 0.1, shadowRadius: 6 } })
   },
   ctaCallText:      { fontSize: 15, fontWeight: '700' },
   editProfileBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
-    justifyContent: 'center', paddingVertical: 13, borderRadius: 14,
-    borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%', justifyContent: 'center', paddingVertical: 13, borderRadius: 14, 
+    borderWidth: 0,
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 3, height: 3 }, shadowOpacity: 0.08, shadowRadius: 6 } })
   },
   editProfileText:  { fontSize: 15, fontWeight: '700' },
 

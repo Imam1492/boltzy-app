@@ -105,7 +105,11 @@ const styles = StyleSheet.create({
   iconWrap: { width: 80, height: 80, borderRadius: 40, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
   mainTitle: { fontSize: 24, fontWeight: 'bold', marginBottom: 6 },
   subTitle: { fontSize: 15 },
-  faqCard: { borderRadius: 16, marginBottom: 12, borderWidth: 1, overflow: 'hidden' },
+  faqCard: { 
+    borderRadius: 16, marginBottom: 12, overflow: 'hidden', 
+    borderWidth: 0,
+    ...Platform.select({ default: { elevation: 3, shadowColor: '#000', shadowOffset: { width: 2, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6 }})
+  },
   faqHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 },
   question: { fontSize: 16, flex: 1, marginRight: 12, lineHeight: 22 },
   answerWrap: { padding: 16, paddingTop: 12, borderTopWidth: 1 },

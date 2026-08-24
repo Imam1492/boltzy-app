@@ -70,14 +70,24 @@ const styles = StyleSheet.create({
   loginText: { fontSize: 16, fontWeight: '600', color: '#666' },
   
   hero: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, paddingTop: 60, maxWidth: 800, width: '100%', alignSelf: 'center' },
-  badge: { backgroundColor: '#f0f0f0', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, marginBottom: 24 },
+ badge: { 
+    backgroundColor: '#f0f0f0', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, marginBottom: 24,
+    borderWidth: 0,
+    ...Platform.select({ web: { boxShadow: '4px 4px 10px rgba(0,0,0,0.05)' }, default: { elevation: 2, shadowColor: '#000', shadowOffset: { width: 2, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4 } })
+  },
+  
+
   badgeText: { fontSize: 14, fontWeight: '600', color: '#333' },
   
   headline: { fontSize: Platform.OS === 'web' ? 64 : 42, fontWeight: '900', textAlign: 'center', color: '#000', letterSpacing: -2, lineHeight: Platform.OS === 'web' ? 70 : 48, marginBottom: 24 },
   subheadline: { fontSize: 18, color: '#666', textAlign: 'center', lineHeight: 28, marginBottom: 40, maxWidth: 600 },
   
   buttonRow: { flexDirection: 'row', gap: 16, flexWrap: 'wrap', justifyContent: 'center' },
-  storeBtn: { backgroundColor: '#000', borderRadius: 14, paddingHorizontal: 20, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', minWidth: 200 },
+  storeBtn: { 
+    backgroundColor: '#000', borderRadius: 14, paddingHorizontal: 20, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', minWidth: 200,
+    borderWidth: 0,
+    ...Platform.select({ web: { boxShadow: '0 8px 20px rgba(0,0,0,0.2)' }, default: { elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10 } })
+  },
   storeSub: { color: '#aaa', fontSize: 10, textTransform: 'uppercase', fontWeight: '600' },
   storeTitle: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
 

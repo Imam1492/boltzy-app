@@ -443,6 +443,7 @@ export default function Inbox() {
         <FlatList 
           data={['1', '2', '3']} 
           keyExtractor={(item) => item}
+          contentContainerStyle={styles.listContent} // ✨ ADD THIS LINE!
           renderItem={() => (
            <View style={[styles.chatCard, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
               <View style={styles.imageWrapper}>
@@ -557,7 +558,17 @@ export default function Inbox() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1 },
+  header: { 
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, 
+    borderBottomWidth: 0,
+    ...Platform.select({ default: { elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 8 }}) 
+  },
+  chatCard: { 
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, 
+    borderRadius: 16, marginBottom: 12, marginHorizontal: 16, // Added margins for capsule effect
+    borderBottomWidth: 0, // Removed border
+    ...Platform.select({ default: { elevation: 3, shadowColor: '#000', shadowOffset: { width: 2, height: 2 }, shadowOpacity: 0.08, shadowRadius: 5 }}) 
+  },
   headerTitle: { fontSize: 22, fontWeight: 'bold' },
   selectModeBtn: { padding: 4 },
   tabBtn: { flex: 1, paddingVertical: 12, borderBottomWidth: 2, borderColor: 'transparent', alignItems: 'center' },
@@ -565,9 +576,10 @@ const styles = StyleSheet.create({
   searchSection: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1 },
   searchBar: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
   searchInput: { flex: 1, fontSize: 15 },
-  listContent: { paddingBottom: 32 },
+  listContent: { paddingTop: 16, paddingBottom: 32 },  
+
   
-  chatCard: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
+  
   imageWrapper: { position: 'relative', marginRight: 14 },
   itemThumb: { width: 58, height: 58, borderRadius: 12 },
   itemThumbFallback: { backgroundColor: '#eee', justifyContent: 'center', alignItems: 'center' },

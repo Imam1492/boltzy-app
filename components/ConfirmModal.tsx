@@ -1,44 +1,37 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Modal, Platform } from 'react-native';
+import { Modal, View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { useTheme } from '../context/ThemeContext'; // ✨ Import Theme
 
-interface ConfirmModalProps {
+type ConfirmModalProps = {
   visible: boolean;
   title: string;
   message: string;
-  confirmText?: string;
-  cancelText?: string;
-  isDestructive?: boolean; // If true, the confirm button turns red!
   onConfirm: () => void;
   onCancel: () => void;
-}
+  isDestructive?: boolean;
+};
 
-export default function ConfirmModal({
-  visible,
-  title,
-  message,
-  confirmText = 'Confirm',
-  cancelText = 'Cancel',
-  isDestructive = false,
-  onConfirm,
-  onCancel,
-}: ConfirmModalProps) {
+export default function ConfirmModal({ visible, title, message, onConfirm, onCancel, isDestructive = false }: ConfirmModalProps) {
+  const { colors, isDark } = useTheme(); // ✨ Use Theme Colors
+
   return (
-    <Modal visible={visible} transparent animationType="fade">
+    <Modal transparent visible={visible} animationType="fade">
       <View style={styles.overlay}>
-        <View style={styles.card}>
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.message}>{message}</Text>
-
-          <View style={styles.buttonRow}>
-            <TouchableOpacity style={styles.cancelBtn} onPress={onCancel}>
-              <Text style={styles.cancelBtnText}>{cancelText}</Text>
+        {/* ✨ Dynamic Background */}
+        <View style={[styles.modalView, { backgroundColor: colors.card }]}> 
+          
+          <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+          <Text style={[styles.message, { color: colors.textSecondary }]}>{message}</Text>
+          
+          <View style={[styles.buttonContainer, { borderTopColor: colors.border }]}>
+            <TouchableOpacity style={[styles.button, styles.cancelButton, { borderRightColor: colors.border }]} onPress={onCancel}>
+              <Text style={[styles.buttonText, { color: colors.text }]}>Cancel</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.confirmBtn, isDestructive && styles.destructiveBtn]} 
-              onPress={onConfirm}
-            >
-              <Text style={styles.confirmBtnText}>{confirmText}</Text>
+            
+            <TouchableOpacity style={[styles.button, styles.confirmButton]} onPress={onConfirm}>
+              <Text style={[styles.buttonText, { color: isDestructive ? '#FF3B30' : colors.tint, fontWeight: 'bold' }]}>
+                {isDestructive ? 'Delete' : 'Confirm'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -48,64 +41,22 @@ export default function ConfirmModal({
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+  overlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center' },
+  title: { fontSize: 18, fontWeight: 'bold', marginTop: 20, marginBottom: 8, textAlign: 'center' },
+  message: { fontSize: 14, textAlign: 'center', marginHorizontal: 20, marginBottom: 20 },
+  button: { flex: 1, paddingVertical: 14, alignItems: 'center', justifyContent: 'center' },
+  modalView: { 
+    width: '80%', borderRadius: 14, alignItems: 'center', overflow: 'hidden',
+    borderWidth: 0,
+    ...Platform.select({ web: { boxShadow: '0 4px 16px rgba(0,0,0,0.1)' }, default: { elevation: 10, shadowColor: '#000', shadowOffset: { width: 4, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12 } })
   },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 24,
-    width: '100%',
-    maxWidth: 400, // Keeps it from stretching too wide on laptops
-    ...Platform.select({
-      web: { boxShadow: '0px 8px 24px rgba(0,0,0,0.12)' },
-      default: { elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8 },
-    }),
+  buttonContainer: { 
+    flexDirection: 'row', 
+    borderTopWidth: 0 // Removed harsh divider line
   },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 8,
+  cancelButton: { 
+    borderRightWidth: 0 // Removed harsh divider line
   },
-  message: {
-    fontSize: 16,
-    color: '#666',
-    lineHeight: 22,
-    marginBottom: 24,
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
-  },
-  cancelBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    backgroundColor: '#f5f5f5',
-  },
-  cancelBtnText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-  },
-  confirmBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    backgroundColor: '#000', // Default black for safe actions
-  },
-  destructiveBtn: {
-    backgroundColor: '#FF3B30', // Red for delete/logout
-  },
-  confirmBtnText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-  },
+  confirmButton: {},
+  buttonText: { fontSize: 16 },
 });

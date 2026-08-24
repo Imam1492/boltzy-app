@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "549149061372",
+    "project_id": "boltzy-5a735",
+    "storage_bucket": "boltzy-5a735.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:549149061372:android:047e9c3796f3cd22b16779",
+        "android_client_info": {
+          "package_name": "com.imam_khan.boltzyapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA4WwADYDEb724YO9Q7yLkFVVgCrozLRmI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
